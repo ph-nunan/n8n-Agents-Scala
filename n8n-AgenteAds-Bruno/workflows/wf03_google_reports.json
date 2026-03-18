@@ -1,0 +1,131 @@
+{
+  "name": "WF-03 | Google Ads Reports → WhatsApp",
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "timezone": "America/Sao_Paulo"
+  },
+  "nodes": [
+    {
+      "id": "node-wf03-01",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300],
+      "parameters": {
+        "rule": {
+          "interval": [{"field": "cronExpression", "expression": "5 8 * * 1"}]
+        }
+      }
+    },
+    {
+      "id": "node-wf03-02",
+      "name": "Read Clients",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [460, 300],
+      "parameters": {
+        "operation": "read",
+        "documentId": {"__rl": true, "value": "1YweVU-kJjvjb5QLJpUu8xUpJS4g7QL0aL1CdKgFTt7A", "mode": "id"},
+        "sheetName": {"__rl": true, "value": "Clientes", "mode": "name"},
+        "filtersUI": {},
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {"id": "UeSaLFF10d9utrmA", "name": "Google Sheets - Paulo"}
+      }
+    },
+    {
+      "id": "node-wf03-03",
+      "name": "Filter Active Clients",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [680, 300],
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+          "conditions": [
+            {"id": "cond-ativo", "leftValue": "={{ $json.ativo }}", "rightValue": "TRUE", "operator": {"type": "string", "operation": "equals"}},
+            {"id": "cond-google", "leftValue": "={{ $json.google_customer_id }}", "rightValue": "", "operator": {"type": "string", "operation": "notEmpty"}}
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "node-wf03-04",
+      "name": "Process One Client",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [900, 300],
+      "parameters": {"batchSize": 1, "options": {}}
+    },
+    {
+      "id": "node-wf03-05",
+      "name": "Google Ads API Query",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://googleads.googleapis.com/v19/customers/' + $json.google_customer_id.replace(/-/g, '') + '/googleAds:search' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleAdsOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "developer-token", "value": "[REDACTED_GOOGLE_DEV_TOKEN]"},
+            {"name": "login-customer-id", "value": "4323799990"}
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "query": "SELECT campaign.name, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.ctr, metrics.average_cpc, metrics.conversions FROM campaign WHERE segments.date DURING LAST_7_DAYS AND campaign.status != 'REMOVED'"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleAdsOAuth2Api": {"id": "2yQz1qh73JLxM3Rr", "name": "Google Ads account"}
+      }
+    },
+    {
+      "id": "node-wf03-06",
+      "name": "Parse & Format Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const clientData = $('Process One Client').item.json;\nconst adsData = $input.item.json;\nconst results = adsData.results || [];\nconst nomeCliente = clientData.nome_cliente || 'Cliente';\nconst whatsappRaw = clientData.whatsapp || '';\n\nlet campaignLines = '';\nif (results.length === 0) {\n  campaignLines = '⚠️ Nenhuma campanha ativa no período.';\n} else {\n  for (const row of results) {\n    const campaign = row.campaign || {};\n    const metrics = row.metrics || {};\n    const name = campaign.name || 'Campanha sem nome';\n    const impressions = parseInt(metrics.impressions || 0).toLocaleString('pt-BR');\n    const clicks = parseInt(metrics.clicks || 0).toLocaleString('pt-BR');\n    const costMicros = parseFloat(metrics.costMicros || metrics.cost_micros || 0);\n    const cost = (costMicros / 1000000).toFixed(2);\n    const ctr = (parseFloat(metrics.ctr || 0) * 100).toFixed(2);\n    const avgCpcMicros = parseFloat(metrics.averageCpc || metrics.average_cpc || 0);\n    const avgCpc = (avgCpcMicros / 1000000).toFixed(2);\n    const conversions = parseFloat(metrics.conversions || 0).toFixed(0);\n    campaignLines += `\\n🔍 *${name}*\\n`;\n    campaignLines += `• Impressões: ${impressions}\\n`;\n    campaignLines += `• Cliques: ${clicks}\\n`;\n    campaignLines += `• CTR: ${ctr}%\\n`;\n    campaignLines += `• CPC Médio: R$${avgCpc}\\n`;\n    campaignLines += `• Investimento: R$${cost}\\n`;\n    campaignLines += `• Conversões: ${conversions}\\n`;\n  }\n}\n\nlet phone = whatsappRaw.replace(/\\D/g, '');\nif (phone.length === 11 || phone.length === 10) phone = '55' + phone;\n\nconst message = `📊 *Relatório Semanal - ${nomeCliente}*\\n📅 Período: últimos 7 dias\\n\\n🎯 *Campanhas Google Ads:*\\n${campaignLines}\\n💡 Dúvidas? Entre em contato!`;\nreturn { json: { phone, message, nome_cliente: nomeCliente } };"
+      }
+    },
+    {
+      "id": "node-wf03-07",
+      "name": "Send WhatsApp Report",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [1560, 300],
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "971782562694033",
+        "recipientPhoneNumber": "={{ $json.phone }}",
+        "textBody": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "whatsAppApi": {"id": "umUchtUGj2ZzikQ5", "name": "WhatsApp account"}
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {"main": [[{"node": "Read Clients", "type": "main", "index": 0}]]},
+    "Read Clients": {"main": [[{"node": "Filter Active Clients", "type": "main", "index": 0}]]},
+    "Filter Active Clients": {"main": [[{"node": "Process One Client", "type": "main", "index": 0}]]},
+    "Process One Client": {"main": [[{"node": "Google Ads API Query", "type": "main", "index": 0}]]},
+    "Google Ads API Query": {"main": [[{"node": "Parse & Format Report", "type": "main", "index": 0}]]},
+    "Parse & Format Report": {"main": [[{"node": "Send WhatsApp Report", "type": "main", "index": 0}]]},
+    "Send WhatsApp Report": {"main": [[{"node": "Process One Client", "type": "main", "index": 0}]]}
+  },
+  "staticData": null
+}

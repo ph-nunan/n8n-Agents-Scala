@@ -1,0 +1,253 @@
+{
+  "name": "WF-01 | AI Campaign Agent (WhatsApp)",
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "timezone": "America/Sao_Paulo"
+  },
+  "nodes": [
+    {
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "campaign-agent-webhook",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "campaign-agent",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "extract-message",
+      "name": "Extract Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 300],
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {"id": "a1", "name": "phoneNumber", "value": "={{ $json.body.phoneNumber }}", "type": "string"},
+            {"id": "a2", "name": "messageText", "value": "={{ $json.body.messageText }}", "type": "string"}
+          ]
+        }
+      }
+    },
+    {
+      "id": "ai-agent",
+      "name": "AI Campaign Manager",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [660, 300],
+      "parameters": {
+        "agent": "toolsAgent",
+        "text": "={{ $json.messageText }}",
+        "systemMessage": "Você é um especialista em criação e gerenciamento de campanhas de anúncios digitais. Você recebe comandos em português via WhatsApp e executa ações nas plataformas Meta Ads e Google Ads.\n\nCONTEXTO:\n- Meta Ad Account ID: act_120244137424200671\n- Meta Access Token: [REDACTED_META_TOKEN]\n- Google Ads MCC ID: 4323799990\n- Google Ads Developer Token: [REDACTED_GOOGLE_DEV_TOKEN]\n\nCAPACIDADES:\n1. Listar campanhas Meta Ads ativas\n2. Listar campanhas Google Ads ativas\n3. Criar campanha de tráfego no Meta Ads (requer: nome, orçamento diário em R$, URL de destino, objetivo)\n4. Pausar/ativar campanha no Meta Ads\n5. Ver relatório de performance de uma campanha específica\n6. Criar campanha de busca no Google Ads (requer: nome, orçamento diário, palavras-chave, URL)\n\nRESPONDA SEMPRE em português, de forma concisa e clara.\nSe o usuário pedir algo que você não pode fazer, explique o que você pode fazer.\nSe precisar de mais informações para executar uma ação, pergunte de forma objetiva.\nFormate os números em formato brasileiro (ex: R$ 1.500,00).",
+        "options": {
+          "returnIntermediateSteps": false
+        }
+      }
+    },
+    {
+      "id": "openai-model",
+      "name": "OpenAI GPT-4o-mini",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [660, 520],
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "options": {"temperature": 0.3}
+      },
+      "credentials": {
+        "openAiApi": {"id": "IhMcXCpYHHMLb5Gh", "name": "OpenAi account 2"}
+      }
+    },
+    {
+      "id": "tool-list-meta-campaigns",
+      "name": "Listar Campanhas Meta",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [440, 520],
+      "parameters": {
+        "name": "listar_campanhas_meta",
+        "description": "Lista todas as campanhas ativas no Meta Ads. Use quando o usuário pedir para ver, listar ou verificar campanhas do Facebook/Instagram/Meta.",
+        "method": "GET",
+        "url": "https://graph.facebook.com/v19.0/act_120244137424200671/campaigns",
+        "authentication": "none",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {"name": "fields", "value": "id,name,status,daily_budget,lifetime_budget,objective,start_time"},
+            {"name": "access_token", "value": "[REDACTED_META_TOKEN]"}
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "tool-create-meta-campaign",
+      "name": "Criar Campanha Meta",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [660, 520],
+      "parameters": {
+        "name": "criar_campanha_meta",
+        "description": "Cria uma nova campanha no Meta Ads (Facebook/Instagram). Requer: name (nome da campanha), objective (OUTCOME_TRAFFIC, OUTCOME_AWARENESS, OUTCOME_LEADS, OUTCOME_SALES), daily_budget (em centavos, ex: R$50/dia = 5000), status (ACTIVE ou PAUSED). Retorna o ID da campanha criada.",
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/act_120244137424200671/campaigns",
+        "authentication": "none",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {"name": "access_token", "value": "[REDACTED_META_TOKEN]"}
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {"name": "name", "value": "={name}"},
+            {"name": "objective", "value": "={objective}"},
+            {"name": "daily_budget", "value": "={daily_budget}"},
+            {"name": "status", "value": "={status}"},
+            {"name": "special_ad_categories", "value": "[]"}
+          ]
+        },
+        "placeholderDefinitions": {
+          "values": [
+            {"name": "name", "description": "Nome da campanha", "type": "string"},
+            {"name": "objective", "description": "Objetivo: OUTCOME_TRAFFIC, OUTCOME_AWARENESS, OUTCOME_LEADS ou OUTCOME_SALES", "type": "string"},
+            {"name": "daily_budget", "value": "daily_budget", "description": "Orçamento diário em centavos (R$50 = 5000)", "type": "number"},
+            {"name": "status", "description": "ACTIVE ou PAUSED", "type": "string"}
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "tool-pause-meta-campaign",
+      "name": "Pausar Ativar Campanha Meta",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [880, 520],
+      "parameters": {
+        "name": "pausar_ativar_campanha_meta",
+        "description": "Pausa ou ativa uma campanha existente no Meta Ads. Requer: campaign_id (ID da campanha), status (ACTIVE para ativar, PAUSED para pausar).",
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v19.0/{campaign_id}",
+        "authentication": "none",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {"name": "access_token", "value": "[REDACTED_META_TOKEN]"},
+            {"name": "status", "value": "={status}"}
+          ]
+        },
+        "placeholderDefinitions": {
+          "values": [
+            {"name": "campaign_id", "description": "ID da campanha Meta", "type": "string"},
+            {"name": "status", "description": "ACTIVE ou PAUSED", "type": "string"}
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "tool-meta-insights",
+      "name": "Relatório Meta Campanha",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [1100, 520],
+      "parameters": {
+        "name": "relatorio_campanha_meta",
+        "description": "Busca métricas de performance de uma campanha Meta Ads. Requer: campaign_id (ID da campanha). Retorna impressões, cliques, CTR, CPC, gasto e alcance dos últimos 7 dias.",
+        "method": "GET",
+        "url": "=https://graph.facebook.com/v19.0/{campaign_id}/insights",
+        "authentication": "none",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {"name": "fields", "value": "campaign_name,impressions,clicks,spend,reach,ctr,cpc"},
+            {"name": "date_preset", "value": "last_7d"},
+            {"name": "access_token", "value": "[REDACTED_META_TOKEN]"}
+          ]
+        },
+        "placeholderDefinitions": {
+          "values": [
+            {"name": "campaign_id", "description": "ID da campanha Meta", "type": "string"}
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "tool-list-google-campaigns",
+      "name": "Listar Campanhas Google",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [1320, 520],
+      "parameters": {
+        "name": "listar_campanhas_google",
+        "description": "Lista campanhas ativas no Google Ads. Requer: customer_id (ID do cliente Google Ads sem traços, ex: 1129227354). Use quando o usuário pedir para ver campanhas do Google.",
+        "method": "POST",
+        "url": "=https://googleads.googleapis.com/v19/customers/{customer_id}/googleAds:search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleAdsOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "developer-token", "value": "[REDACTED_GOOGLE_DEV_TOKEN]"},
+            {"name": "login-customer-id", "value": "4323799990"}
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "query": "SELECT campaign.id, campaign.name, campaign.status, campaign_budget.amount_micros FROM campaign WHERE campaign.status != 'REMOVED'"
+        },
+        "placeholderDefinitions": {
+          "values": [
+            {"name": "customer_id", "description": "ID do cliente Google Ads sem traços", "type": "string"}
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleAdsOAuth2Api": {"id": "2yQz1qh73JLxM3Rr", "name": "Google Ads account"}
+      }
+    },
+    {
+      "id": "send-response",
+      "name": "Enviar Resposta WhatsApp",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [880, 300],
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "971782562694033",
+        "recipientPhoneNumber": "={{ $('Extract Message').first().json.phoneNumber }}",
+        "textBody": "={{ $json.output }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "whatsAppApi": {"id": "umUchtUGj2ZzikQ5", "name": "WhatsApp account"}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {"main": [[{"node": "Extract Message", "type": "main", "index": 0}]]},
+    "Extract Message": {"main": [[{"node": "AI Campaign Manager", "type": "main", "index": 0}]]},
+    "AI Campaign Manager": {"main": [[{"node": "Enviar Resposta WhatsApp", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o-mini": {"ai_languageModel": [[{"node": "AI Campaign Manager", "type": "ai_languageModel", "index": 0}]]},
+    "Listar Campanhas Meta": {"ai_tool": [[{"node": "AI Campaign Manager", "type": "ai_tool", "index": 0}]]},
+    "Criar Campanha Meta": {"ai_tool": [[{"node": "AI Campaign Manager", "type": "ai_tool", "index": 0}]]},
+    "Pausar Ativar Campanha Meta": {"ai_tool": [[{"node": "AI Campaign Manager", "type": "ai_tool", "index": 0}]]},
+    "Relatório Meta Campanha": {"ai_tool": [[{"node": "AI Campaign Manager", "type": "ai_tool", "index": 0}]]},
+    "Listar Campanhas Google": {"ai_tool": [[{"node": "AI Campaign Manager", "type": "ai_tool", "index": 0}]]}
+  },
+  "staticData": null
+}
