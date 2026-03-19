@@ -18,8 +18,8 @@ Agente de atendimento IA para qualificação de leads e agendamento de diagnóst
 
 - **ID:** `EVbZX91iB5moD6I4`
 - **Nome:** Scala — WhatsApp AI Agent (Ana) 24/7
-- **Status:** ✅ ATIVO em produção (ativado 2026-03-16)
-- **Nodes:** 16
+- **Status:** ✅ ATIVO em produção (ativado 2026-03-16, atualizado 2026-03-19)
+- **Nodes:** 32
 
 ## IDs Meta (atualizado 2026-03-16)
 
@@ -50,35 +50,54 @@ Agente de atendimento IA para qualificação de leads e agendamento de diagnóst
 ## Fluxo do Agente
 
 ```
-WhatsApp Trigger → Extrair Dados → Buscar Histórico (Sheets)
-→ Buscar Disponibilidade (Google Calendar freeBusy)
-→ Formatar Slots (horários livres até 22h, sem domingos)
-→ Montar Contexto (prompt com histórico + agenda real)
-→ OpenAI GPT-4o-mini → Delay 5s → Preparar Resposta
-→ Salvar no Sheets → Enviar WhatsApp
-→ Detectar Agendamento (IF)?
-   ├── SIM: Extrair Info → Criar Evento (Meet) → Enviar Link Meet
-   └── NÃO: fim
+WhatsApp Trigger → Extrair Dados → É Paulo? (IF)
+   ├── Paulo (dono): Buscar Sessao → [menu / Bruno / Ana]
+   └── Lead: Buscar Histórico (Sheets)
+         ↓
+   Buscar Disponibilidade (Google Calendar freeBusy)
+         ↓
+   Formatar Slots (horários livres até 22h, sem domingos)
+         ↓
+   Buscar Reuniões (Google Calendar events do mês — para modo dono)
+         ↓
+   Montar Contexto (detecta Paulo vs lead; injeta reuniões se perguntado)
+         ↓
+   OpenAI GPT-4o-mini → Delay 5s → Preparar Resposta
+         ↓
+   Salvar no Sheets → Enviar WhatsApp
+   ├── Detectar Agendamento (IF)?
+   │   ├── SIM: Extrair Info → Criar Evento (Meet) → Enviar Link Meet
+   │   └── NÃO: fim
+   └── CRM: Extrair Perfil → Formatar → Salvar Lead (paralelo)
 ```
+
+### Modo Dono (Paulo)
+
+Quando Paulo (`556181292879`) mensageia, a Ana age como **assistente executiva** (não vendedora):
+- Detecta se a mensagem é sobre reuniões/agenda via regex
+- Se sim: injeta `<dados_reunioes>` com contagem do mês, realizadas e próximas
+- Se não: responde diretamente sem dados de calendário
 
 ## Estrutura da Pasta
 
 ```
-agenteIA-scala/
+n8n-AgenteAtendimento-Ana/
 ├── README.md                              # Este arquivo
 ├── docs/
 │   ├── guia-configuracao.md               # Setup completo passo a passo
 │   ├── system-prompt.md                   # System prompt editável da Ana
-│   └── analise-sessao-2026-03-16.md       # Análise completa, erros e aprendizados
+│   ├── analise-sessao-2026-03-16.md       # Implementação inicial — 14 erros e soluções
+│   └── analise-sessao-2026-03-19.md       # Modo dono + fix relatório de reuniões
 └── workflows/
-    └── scala-whatsapp-ai-agent.json       # JSON completo do workflow n8n
+    └── scala-whatsapp-ai-agent.json       # JSON completo do workflow n8n (sincronizado)
 ```
 
 ## Documentação
 
 - Setup completo: [`docs/guia-configuracao.md`](docs/guia-configuracao.md)
 - System prompt editável: [`docs/system-prompt.md`](docs/system-prompt.md)
-- **Análise completa da sessão:** [`docs/analise-sessao-2026-03-16.md`](docs/analise-sessao-2026-03-16.md)
+- Implementação inicial (2026-03-16): [`docs/analise-sessao-2026-03-16.md`](docs/analise-sessao-2026-03-16.md)
+- **Modo dono + fix reuniões (2026-03-19):** [`docs/analise-sessao-2026-03-19.md`](docs/analise-sessao-2026-03-19.md)
 
 ## Credenciais no n8n
 
@@ -96,3 +115,7 @@ agenteIA-scala/
 - **`alwaysOutputData`** deve ser propriedade do node, NÃO de `parameters.options`.
 - **Phone Number ID** vai no parâmetro do node WhatsApp, não na credencial.
 - A lógica de disponibilidade injeta os **períodos ocupados** (não os livres) para Ana não entrar em loop.
+- **Code node com múltiplos inputs:** n8n executa o código uma vez por branch — nunca faz merge. Sempre linearizar para 1 input quando precisar de dados de múltiplos nodes.
+- **`const` no escopo raiz do Code node:** o task runner reutiliza o contexto de VM. Sempre usar IIFE: `return (() => { ... })();`
+- **`e.start.dateTime` do Google Calendar é string:** `new Date(dateString)` parseia corretamente (já tem timezone). NÃO subtrair números de strings de data (`string - number = NaN`).
+- **`updateNode` no `n8n_update_partial_workflow`:** usa `{ nodeName, updates: { "parameters.jsCode": "..." } }` com dot notation. Não usar `changes`.
