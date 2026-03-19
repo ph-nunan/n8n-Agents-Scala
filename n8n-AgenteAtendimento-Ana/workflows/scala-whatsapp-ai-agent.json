@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-03-19T02:07:31.554Z",
+  "updatedAt": "2026-03-19T02:19:56.306Z",
   "createdAt": "2026-03-16T16:23:32.929Z",
   "id": "EVbZX91iB5moD6I4",
   "name": "Scala — WhatsApp AI Agent (Ana) 24/7",
@@ -1200,15 +1200,14 @@
             "node": "Formatar Slots",
             "type": "main",
             "index": 0
-          }
-        ],
-        [
+          },
           {
             "node": "Buscar Reuniões",
             "type": "main",
             "index": 0
           }
-        ]
+        ],
+        []
       ]
     },
     "Formatar Slots": {
@@ -1464,9 +1463,9 @@
     "templateCredsSetupCompleted": true
   },
   "pinData": {},
-  "versionId": "fc9bdf86-e8d9-432d-b6e4-ced8dd11287c",
-  "activeVersionId": "fc9bdf86-e8d9-432d-b6e4-ced8dd11287c",
-  "versionCounter": 116,
+  "versionId": "a94fdc6e-db6e-4fb0-b720-6acfb4eddc9f",
+  "activeVersionId": "a94fdc6e-db6e-4fb0-b720-6acfb4eddc9f",
+  "versionCounter": 119,
   "triggerCount": 1,
   "shared": [
     {
@@ -1489,9 +1488,9 @@
   ],
   "tags": [],
   "activeVersion": {
-    "updatedAt": "2026-03-19T02:07:31.556Z",
-    "createdAt": "2026-03-19T02:07:31.556Z",
-    "versionId": "fc9bdf86-e8d9-432d-b6e4-ced8dd11287c",
+    "updatedAt": "2026-03-19T02:19:56.308Z",
+    "createdAt": "2026-03-19T02:19:56.308Z",
+    "versionId": "a94fdc6e-db6e-4fb0-b720-6acfb4eddc9f",
     "workflowId": "EVbZX91iB5moD6I4",
     "nodes": [
       {
@@ -2687,15 +2686,14 @@
               "node": "Formatar Slots",
               "type": "main",
               "index": 0
-            }
-          ],
-          [
+            },
             {
               "node": "Buscar Reuniões",
               "type": "main",
               "index": 0
             }
-          ]
+          ],
+          []
         ]
       },
       "Formatar Slots": {
@@ -2945,18 +2943,18 @@
     "autosaved": false,
     "workflowPublishHistory": [
       {
-        "createdAt": "2026-03-19T02:07:35.663Z",
-        "id": 109,
+        "createdAt": "2026-03-19T02:20:00.333Z",
+        "id": 111,
         "workflowId": "EVbZX91iB5moD6I4",
-        "versionId": "fc9bdf86-e8d9-432d-b6e4-ced8dd11287c",
+        "versionId": "a94fdc6e-db6e-4fb0-b720-6acfb4eddc9f",
         "event": "activated",
         "userId": "cdef1802-d0c6-490f-add8-cd6f5c4b604d"
       },
       {
-        "createdAt": "2026-03-19T02:07:33.663Z",
-        "id": 108,
+        "createdAt": "2026-03-19T02:19:58.217Z",
+        "id": 110,
         "workflowId": "EVbZX91iB5moD6I4",
-        "versionId": "fc9bdf86-e8d9-432d-b6e4-ced8dd11287c",
+        "versionId": "a94fdc6e-db6e-4fb0-b720-6acfb4eddc9f",
         "event": "deactivated",
         "userId": "cdef1802-d0c6-490f-add8-cd6f5c4b604d"
       }
