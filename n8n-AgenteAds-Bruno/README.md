@@ -23,6 +23,9 @@ Bruno é um agente de IA que permite a **Paulo** (gestor da Scala) gerenciar cam
 - Listar campanhas Meta Ads ativas
 - Pausar ou ativar campanha pelo ID
 - Relatório de métricas dos últimos 7 dias (impressões, cliques, CTR, CPC, gasto)
+- Criar conjunto de anúncios (ad set) com targeting, budget, pixel e destination type
+- Criar anúncios com copy, headline e link de destino (image_hash placeholder padrão)
+- Upload de imagem via URL para obter hash (workaround: usa hash pré-carregado do logo)
 - Listar campanhas Google Ads de qualquer conta vinculada ao MCC
 
 **Inteligência de decisão:**
@@ -114,6 +117,14 @@ Paulo (WhatsApp pessoal: 61981292879)
 | 8 | Relatório Meta Campanha | toolHttpRequest | GET `/{campaign_id}/insights` |
 | 9 | Listar Campanhas Google | toolHttpRequest | POST `/{customer_id}/googleAds:search` |
 | 10 | Enviar Resposta WhatsApp | whatsApp | Envia resposta para Paulo |
+| 11 | Criar Conjunto de Anúncios Meta | toolHttpRequest | POST `/act_1605651367382391/adsets` |
+| 12 | Criar Anúncio Meta | toolHttpRequest | POST `/act_1605651367382391/ads` |
+| 13 | Upload Imagem Meta | toolCode | Upload binário multipart (workaround: hash padrão) |
+| 14 | Buscar Interesses Meta | toolHttpRequest | GET `/search?type=adinterest` |
+| 15 | Buscar Histórico Bruno | googleSheets | Lê histórico de conversa do Sheets |
+| 16 | Montar Contexto Bruno | code | Monta prompt com histórico |
+| 17 | Salvar Mensagem User Bruno | googleSheets | Persiste mensagem do usuário |
+| 18 | Salvar Resposta Bruno | googleSheets | Persiste resposta do agente |
 
 ### WF-02 — Meta Ads Reports → WhatsApp
 - **ID:** `dLr5lDWj7rtLgbGk`
@@ -172,9 +183,37 @@ O system prompt do Bruno passou por várias iterações. A versão atual (`2026-
 - Protocolo de qualificação (12 perguntas em 3 blocos)
 - Frameworks de métricas, criativos, landing page, otimização
 
-**2026-03-19 (upgrades desta sessão):**
+**2026-03-19 — Sessão 2 (Pixel + Campanha + Capacitação Ads Completa):**
 
-1. **Fix crítico — Ad Account ID incorreto**
+1. **Meta Pixel — Descoberta e correção**
+   - `854431830954678` era App ID do "Scala Agent", não Pixel ID
+   - Pixel real criado via API: `1466153678449297`
+   - Instalado no Next.js via `components/MetaPixel.tsx` com listener global para `wa.me`
+   - Eventos: `PageView` + `wa_button_click` validados com Meta Pixel Helper
+
+2. **Primeira campanha de conversão criada em produção**
+   - Campanha `120244213653500671`: OUTCOME_LEADS, PAUSED
+   - Ad Set `120244213653710671`: OFFSITE_CONVERSIONS + WEBSITE + Advantage+ + pixel wa_button_click
+   - 3 anúncios (IDs: `120244213654860671`, `120244213655060671`, `120244213654890671`)
+   - Funil: Anúncio → Site Scala → Clique WhatsApp → Ana qualifica → Diagnóstico
+
+3. **Novos tools no WF-01**
+   - `criar_conjunto_anuncios_meta`: ad sets com targeting, promoted_object, destination_type
+   - `criar_anuncio_meta`: anúncios com creative (image_hash + copy + link)
+   - `upload_imagem_meta`: upload binário multipart (workaround com hash pré-carregado)
+   - `buscar_interesses_meta`: busca interesses para segmentação
+
+4. **Correções críticas de configuração**
+   - `destination_type=WEBSITE` adicionado como parâmetro obrigatório
+   - Advantage+ Audience habilitado (advantage_audience=1)
+   - Regra: com Advantage+, nunca incluir age_max (Meta rejeita < 65)
+   - Tool `criar_anuncio_meta`: removido "FLUXO OBRIGATORIO: upload" da descrição
+
+5. **System prompt — novas seções**
+   - `<funil_scala>`: funil completo explicado (Anúncio → Site → WA → Ana)
+   - `<setup_padrao_meta_ads>`: configuração validada em produção documentada
+
+6. **Sessão 1 — Fix crítico — Ad Account ID incorreto**
    - Problema: nodes `Criar Campanha Meta` e `Listar Campanhas Meta` usavam `act_120244137424200671` (conta de relatórios)
    - Correto: `act_1605651367382391` (Scala-Conta-Anúncios — única conta com permissão de escrita)
    - Root cause: token do System User `scala-user` só tem acesso de escrita à conta `act_1605651367382391`
@@ -279,7 +318,44 @@ Mensagem recebida no Scala Workflow
 - **Causa:** Após passar por nós de Google Sheets ou IFs, `$json` perde os dados originais
 - **Solução:** Referenciar sempre `$('Extrair Dados').first().json.phoneNumber` em vez de `$json.phoneNumber`
 
-### P7: Bruno não seguia protocolo de qualificação
+### P9: Upload de imagem bloqueado via URL parameter
+- **Sintoma:** `POST /act_.../adimages?url=https://...` retorna `code 3: Application does not have the capability`
+- **Causa:** Meta bloqueia URL upload em apps sem histórico
+- **Solução:** Upload binário multipart (download + form-data). Workaround atual: usar hash pré-carregado `850b86ce7876a024f5c2d4e17054ca1c`
+
+### P10: App em modo Development bloqueia criação de ad creatives
+- **Sintoma:** `Error subcode 1885183: app em modo de desenvolvimento`
+- **Solução:** Publicar app em modo Live via `developers.facebook.com`
+
+### P11: `promoted_object` sem `page_id` rejeitado para OFFSITE_CONVERSIONS
+- **Sintoma:** `Error 1815437: page_id precisa ser válido`
+- **Solução:** Incluir `"page_id": "1079796795206873"` no promoted_object
+
+### P12: `LEAD_GENERATION` incompatível com OUTCOME_LEADS + pixel
+- **Sintoma:** `Error subcode 2490408: meta de desempenho não disponível`
+- **Causa:** LEAD_GENERATION é para Lead Ads form nativo, não para pixel de site
+- **Solução:** Usar `OFFSITE_CONVERSIONS` para conversões via pixel no site
+
+### P13: `promoted_object` imutável após criação
+- **Sintoma:** `Error subcode 1885090: objeto promovido é imutável`
+- **Solução:** Deletar o ad set e criar novo com promoted_object correto desde o início
+
+### P14: `destination_type: UNDEFINED` em ad sets criados sem o campo
+- **Sintoma:** Meta não rastreia corretamente o destino do tráfego
+- **Causa:** Campo não enviado ao criar o ad set
+- **Solução:** Sempre incluir `destination_type=WEBSITE` ao criar ad sets de conversão no site
+
+### P15: Advantage+ rejeita `age_max` < 65
+- **Sintoma:** `Error subcode 1870189: age_max não pode ser < 65 com Advantage+`
+- **Causa:** Com Advantage+ ON, Meta transforma restrições de idade em "sugestões", exigindo teto de 65
+- **Solução:** Com `advantage_audience=1`, usar apenas `age_min` (sem age_max)
+
+### P16: Bruno tentava upload antes de criar anúncio (loop de falha)
+- **Sintoma:** Bruno reportava erro de upload e nunca criava os anúncios
+- **Causa:** Descrição do tool `criar_anuncio_meta` dizia "FLUXO OBRIGATORIO: 1) Chame upload_imagem_meta"
+- **Solução:** Remover instrução de upload obrigatório; dizer para usar hash padrão diretamente
+
+### P17: Bruno não seguia protocolo de qualificação
 - **Causa:** Protocolo existia mas sem enforcement — Bruno respondia sem qualificar
 - **Solução:** Regra absoluta #13 adicionada + gatilhos ampliados para incluir "plano", "estratégia", etc.
 
