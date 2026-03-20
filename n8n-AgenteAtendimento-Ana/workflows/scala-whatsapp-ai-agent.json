@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-03-19T05:08:41.473Z",
+  "updatedAt": "2026-03-20T02:13:06.889Z",
   "createdAt": "2026-03-16T16:23:32.929Z",
   "id": "EVbZX91iB5moD6I4",
-  "name": "Scala — WhatsApp AI Agent (Ana) 24/7",
+  "name": "🤖 Scala AI — Ana + Bruno (WhatsApp 24/7)",
   "description": null,
   "active": true,
   "isArchived": false,
@@ -32,7 +32,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const payload = $input.first().json;\nconst msgs = payload.messages;\nif (!msgs || !msgs.length) return [];\nconst msg = msgs[0];\nif (msg.type !== 'text') return [];\nconst phone = msg.from || '';\nconst text = msg.text?.body?.trim() || '';\nif (!phone || !text) return [];\nconst name = payload.contacts?.[0]?.profile?.name || '';\nreturn [{ json: { phoneNumber: phone, messageText: text, pushName: name, conversationId: 'scala_' + phone, timestamp: new Date().toISOString() } }];"
+        "jsCode": "const payload = $input.first().json;\nconst msgs = payload.messages;\nif (!msgs || !msgs.length) return [];\nconst msg = msgs[0];\nconst phone = msg.from || '';\nconst name = payload.contacts?.[0]?.profile?.name || '';\nconst convId = 'scala_' + phone;\nconst ts = new Date().toISOString();\n\nif (msg.type === 'text') {\n  const text = msg.text?.body?.trim() || '';\n  if (!phone || !text) return [];\n  return [{ json: { phoneNumber: phone, messageText: text, pushName: name, conversationId: convId, timestamp: ts, messageType: 'text' } }];\n} else if (msg.type === 'document') {\n  const doc = msg.document || {};\n  if (!phone || !doc.id) return [];\n  return [{ json: { phoneNumber: phone, messageText: '', pushName: name, conversationId: convId, timestamp: ts, messageType: 'document', mediaId: doc.id, mediaFilename: doc.filename || 'documento.pdf' } }];\n}\nreturn [];"
       },
       "id": "node-2",
       "name": "Extrair Dados",
@@ -74,7 +74,7 @@
     },
     {
       "parameters": {
-        "jsCode": "return (() => {\n  const { messageText, pushName, conversationId, phoneNumber, timestamp } = $('Extrair Dados').first().json;\n  const isPaulo = phoneNumber === '556181292879';\n  const askingAboutMeetings = isPaulo && /reuni[aã]o?s?|agenda|diagn[oó]stico|marcamos|agendamos|agendou|marcou|hor[aá]rios?|quan(tos?|tas?)|hoje|semana|m[eê]s/i.test(messageText);\n\n  let meetingContext = '';\n  if (askingAboutMeetings) {\n    try {\n      const calData = $input.first().json;\n      const eventos = (calData.items || []).filter(e => e.start && e.start.dateTime);\n\n      const agora = new Date();\n      const mesAtual = agora.getMonth();\n      const anoAtual = agora.getFullYear();\n\n      const toDate = (e) => new Date(e.start.dateTime);\n\n      const reunioesMes = eventos.filter(e => {\n        const d = toDate(e);\n        return d.getMonth() === mesAtual && d.getFullYear() === anoAtual;\n      });\n      const realizadas = reunioesMes.filter(e => toDate(e) < agora);\n      const proximas = reunioesMes.filter(e => toDate(e) >= agora);\n\n      const fmt = (e) => {\n        const dt = toDate(e);\n        const data = dt.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', timeZone: 'America/Sao_Paulo' });\n        const hora = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });\n        return `  - ${data} às ${hora}: ${e.summary || 'Sem título'}`;\n      };\n\n      const hoje = agora.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Sao_Paulo' });\n\n      meetingContext = `\\n<dados_reunioes>\\nHOJE: ${hoje}\\nMÊS ATUAL: ${reunioesMes.length} reunião(ões) | ${realizadas.length} realizadas | ${proximas.length} futuras\\n\\nREALIZADAS NO MÊS:\\n${realizadas.length > 0 ? realizadas.map(fmt).join('\\n') : 'Nenhuma realizada ainda.'}\\n\\nPRÓXIMAS:\\n${proximas.length > 0 ? proximas.slice(0, 5).map(fmt).join('\\n') : 'Nenhuma futura agendada.'}\\n</dados_reunioes>`;\n    } catch(err) {\n      meetingContext = `\\n<dados_reunioes>Erro ao carregar agenda: ${String(err)}</dados_reunioes>`;\n    }\n  }\n\n  const slotData = (() => { try { return $('Formatar Slots').first().json; } catch(e) { return {}; } })();\n  const busyText = slotData.busyText || 'nenhum compromisso';\n  const nextSlotsText = slotData.nextSlotsText || 'próximos dias';\n  const leadCtx = pushName ? ' O lead se chama ' + pushName + ' (nome do perfil do WhatsApp).' : '';\n\n  const allRows = $('Buscar Histórico').all();\n  const history = allRows\n    .filter(item => item.json.conversationId === conversationId)\n    .slice(-20)\n    .map(item => ({ role: item.json.role, content: item.json.content }))\n    .filter(m => m.role && m.content);\n\n  const historicoFormatado = history.map(m => `${m.role === 'user' ? 'Lead' : 'Ana'}: ${m.content}`).join('\\n');\n\n  let systemPrompt;\n  if (isPaulo) {\n    systemPrompt = `<modo_dono>\\nVocê é a Ana, assistente executiva de Paulo, dono da Scala Automações.\\nVocê NÃO está vendendo nada para Paulo — ele é o dono da empresa.\\nTrate Paulo como seu chefe direto: seja direta, objetiva e profissional.\\n</modo_dono>\\n\\n<comportamento_com_paulo>\\n- Você é a assistente executiva de Paulo — responda de forma direta e objetiva, sem pitch de vendas\\n- Paulo pode perguntar sobre reuniões, agenda, clientes, métricas ou status de automações\\n- Quando Paulo perguntar sobre reuniões/agenda: use os dados em <dados_reunioes> para responder com precisão\\n- NUNCA mencione reuniões, agenda ou dados de calendário se Paulo não perguntar sobre isso\\n- Tom: direto, como conversa entre profissionais que trabalham juntos\\n- Fale em português brasileiro natural, sem formalidade excessiva\\n</comportamento_com_paulo>\\n\\n<empresa>\\nScala Automações é agência de automação e marketing digital, Brasília/DF.\\nDono: Paulo Nunan\\nAgentes ativos: Ana (atendimento 24/7) + Bruno (gestão de tráfego via WhatsApp)\\nMeta Ad Account: act_1605651367382391 (Scala-Conta-Anúncios)\\nGoogle Ads MCC: 4323799990\\n</empresa>\\n\\n${meetingContext}\\n\\n<historico_conversa>\\n${historicoFormatado}\\n</historico_conversa>`;\n  } else {\n    systemPrompt = `<identidade>Você é a Ana, consultora de automação da Scala. Você NAO é um chatbot. Você é uma profissional de consultoria especializada em marketing digital, tráfego pago e automação de vendas.</identidade><empresa>A Scala é uma empresa de infraestrutura digital para ecossistemas de vendas. Posicionamento: estruturamos o caminho entre o lead e o fechamento. Público-alvo: gestores de tráfego, agências e donos de negócios que investem em tráfego pago. Fundada por profissional com 5 anos em marketing digital especializado em funis de vendas e automação.</empresa><servicos>1. RELATÓRIOS INTELIGENTES - Dashboards automáticos + PDF no WhatsApp do gestor. A partir de R$ 300/mês. 2. CRM AUTOMATIZADO - O CRM se alimenta sozinho com dados dos leads. A partir de R$ 400/mês. 3. QUALIFICAÇÃO DE LEADS - IA que pontua e prioriza leads automaticamente. A partir de R$ 400/mês. 4. FOLLOW-UP COM IA - Sequências automáticas e contextuais que recuperam leads sumidos. A partir de R$ 350/mês. 5. ATENDIMENTO IA 24/7 - Agente de IA que responde, qualifica e agenda reuniões 24 horas por dia. A partir de R$ 500/mês por operação. 6. AUTOMAÇÃO DE ADS - Regras automáticas para campanhas e alertas de performance. A partir de R$ 450/mês.</servicos><processo_vendas>NUNCA pressione para fechar. Fluxo: Rapport → Qualificação → Diagnóstico gratuito → Proposta. Ofereça SEMPRE um diagnóstico gratuito de 30 minutos por Google Meet. APENAS mostre os serviços e benefícios, deixando o lead curioso. NUNCA mencione o nome 'n8n' ou 'automação' de forma técnica.${leadCtx}</processo_vendas><disponibilidade>\\nHorários disponíveis para diagnóstico: ${nextSlotsText}\\nCompromissos já agendados: ${busyText}\\n</disponibilidade><historico_conversa>\\n${historicoFormatado}\\n</historico_conversa>`;\n  }\n\n  const messages = [\n    { role: 'system', content: systemPrompt },\n    ...history\n  ];\n\n  return [{\n    json: {\n      requestBody: {\n        model: 'gpt-4o-mini',\n        max_tokens: 300,\n        temperature: 0.7,\n        messages\n      },\n      conversationId,\n      phoneNumber,\n      originalMessage: messageText,\n      pushName,\n      timestamp\n    }\n  }];\n})();"
+        "jsCode": "return (() => {\nconst { messageText, pushName, conversationId, phoneNumber, timestamp } = $('Extrair Dados').first().json;\nconst isPaulo = phoneNumber === '556181292879';\nconst askingAboutMeetings = isPaulo && /reuni|agenda|diagn|marcamos|agendamos|agendou|marcou|horario|quantos|quantas|hoje|semana|mes/i.test(messageText);\nlet meetingContext = '';\nconst allInputItems = $input.all();\nif (askingAboutMeetings) {\n  try {\n    const calItem = allInputItems.find(item => item.json && item.json.kind === 'calendar#events');\n    const reunioesData = calItem ? calItem.json : { items: [] };\n    const eventos = (reunioesData.items || []).filter(e => e.start && e.start.dateTime);\n    const agora = new Date();\n    const hojeStr = new Date(agora.getTime() - 3 * 60 * 60 * 1000).toISOString().split('T')[0];\n    const mesAtual = agora.getMonth();\n    const anoAtual = agora.getFullYear();\n    const getEventDateTime = (e) => new Date(e.start.dateTime);\n    const getEventDate = (e) => new Date(getEventDateTime(e).getTime() - 3 * 60 * 60 * 1000).toISOString().split('T')[0];\n    const reunioesMes = eventos.filter(e => {\n      const d = getEventDateTime(e);\n      return d.getMonth() === mesAtual && d.getFullYear() === anoAtual;\n    });\n    const reunioesHoje = reunioesMes.filter(e => getEventDate(e) === hojeStr);\n    const reunioesPassadas = reunioesMes.filter(e => getEventDateTime(e) < agora);\n    const reunioesProximas = reunioesMes.filter(e => getEventDateTime(e) >= agora);\n    const formatEvento = (e) => {\n      const dt = getEventDateTime(e);\n      const data = dt.toLocaleDateString('pt-BR', {weekday:'short', day:'2-digit', month:'2-digit', timeZone:'America/Sao_Paulo'});\n      const hora = dt.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit', timeZone:'America/Sao_Paulo'});\n      return '  - ' + data + ' as ' + hora + ': ' + (e.summary || 'Sem titulo');\n    };\n    const totalMes = reunioesMes.length;\n    const realizadas = reunioesPassadas.length;\n    const futuras = reunioesProximas.length;\n    meetingContext = '\\n<dados_reunioes>\\nDATA DE HOJE: ' + hojeStr + '\\n\\nREUNIOES HOJE: ' + (reunioesHoje.length === 0 ? 'nenhuma' : reunioesHoje.length) + '\\n' + reunioesHoje.map(formatEvento).join('\\n') + '\\n\\nMES ATUAL: ' + totalMes + ' reuniao(oes) no total | ' + realizadas + ' realizadas | ' + futuras + ' futuras\\n\\n' + (realizadas > 0 ? 'REALIZADAS NO MES:\\n' + reunioesPassadas.map(formatEvento).join('\\n') : 'Nenhuma realizada ainda este mes.') + '\\n\\n' + (futuras > 0 ? 'PROXIMAS:\\n' + reunioesProximas.slice(0, 5).map(formatEvento).join('\\n') : 'Nenhuma futura agendada.') + '\\n</dados_reunioes>';\n  } catch(err) {\n    meetingContext = '\\n<dados_reunioes>Erro ao processar dados: ' + err.message + '</dados_reunioes>';\n  }\n}\nconst allRows = $('Buscar Hist\\u00f3rico').all();\nconst history = allRows\n  .filter(item => item.json.conversationId === conversationId)\n  .slice(-20)\n  .map(item => ({ role: item.json.role, content: item.json.content }))\n  .filter(m => m.role && m.content);\nconst slotData = (() => { try { return $('Formatar Slots').first().json; } catch(e) { return {}; } })();\nconst busyText = slotData.busyText || 'nenhum compromisso';\nconst nextSlotsText = slotData.nextSlotsText || 'proximos dias';\nconst leadName = pushName || '';\nconst historicoFormatado = history.map(m => (m.role === 'user' ? 'Lead' : 'Ana') + ': ' + m.content).join('\\n');\nlet systemPrompt;\nif (isPaulo) {\n  systemPrompt = '<modo_dono>\\nVoce e a Ana, assistente executiva de Paulo, dono da Scala Automacoes.\\nVoce NAO esta vendendo nada para Paulo - ele e o dono da empresa.\\nTrate Paulo como seu chefe direto: seja direta, objetiva e profissional.\\n</modo_dono>\\n\\n<comportamento_com_paulo>\\n- Voce e a assistente executiva de Paulo - responda de forma direta e objetiva, sem pitch de vendas\\n- Paulo pode perguntar sobre reunioes, agenda, clientes, metricas ou status de automacoes\\n- Quando Paulo perguntar sobre reunioes/agenda: use os dados em <dados_reunioes> se disponiveis. Responda com os numeros e detalhes exatos do que estiver la.\\n- Se <dados_reunioes> mostrar erro ou estiver ausente: diga que nao tem os dados da agenda disponiveis no momento\\n- NUNCA mencione reunioes, agenda ou dados de calendario se Paulo nao perguntar sobre isso\\n- Tom: direto, como conversa entre profissionais que trabalham juntos\\n- Fale em portugues brasileiro natural, sem formalidade excessiva\\n</comportamento_com_paulo>\\n\\n<empresa>\\nScala Automacoes e agencia de automacao e marketing digital, Brasilia/DF.\\nDono: Paulo Nunan\\nAgentes ativos: Ana (atendimento 24/7) + Bruno (gestao de trafego via WhatsApp)\\n</empresa>\\n' + meetingContext + '\\n\\n<historico_conversa>\\n' + historicoFormatado + '\\n</historico_conversa>';\n} else {\n  const leadCtxStr = leadName ? ' O lead se chama ' + leadName + ' (nome do WhatsApp).' : '';\n  systemPrompt = 'Voce e a Ana, consultora executiva de vendas da Scala. Nao e um chatbot \\u2014 e uma profissional especializada em trafego pago, automacao de vendas e marketing digital.' + leadCtxStr + '\\n\\n<missao>\\nSua missao e conduzir uma conversa consultiva para: (1) entender profundamente o negocio e a dor do lead atraves de perguntas estrategicas, (2) qualifica-lo, e (3) quando ele estiver pronto, tornar o diagnostico gratuito o proximo passo obvio e desejavel. Voce NAO tenta fechar nada pelo WhatsApp \\u2014 o objetivo e a reuniao de diagnostico.\\n</missao>\\n\\n<atencao_mensagem_inicial>\\nTODO LEAD QUE VEM DO SITE CHEGA COM A MENSAGEM PRE-FIXADA: \"Oi! Vim pelo site da Scala e quero agendar meu diagnostico gratuito.\"\\nESSA MENSAGEM E UM TEMPLATE AUTOMATICO DO BOTAO DO SITE \\u2014 NAO e intencao real de agendar e NAO indica nivel de consciencia alto.\\nREGRAS ABSOLUTAS:\\n1. NUNCA interprete \"quero agendar\" na primeira mensagem como pedido real de agendamento\\n2. NUNCA oferea horarios ou confirme reuniao na primeira resposta\\n3. TODO LEAD COMECA EM NIVEL NEUTRO, independente do que a mensagem diz\\n4. Sua primeira resposta deve ser uma saudacao calorosa + 1 pergunta de situacao para entender quem e esse lead\\n5. O nivel de consciencia so pode ser descoberto atraves da conversa, nao pela mensagem inicial\\n</atencao_mensagem_inicial>\\n\\n<empresa>\\nScala: infraestrutura digital para ecossistemas de vendas. Estruturamos o caminho entre o lead e o fechamento. Publico-alvo: gestores de trafego, agencias e donos de negocio que investem em trafego pago.\\n</empresa>\\n\\n<spin_selling>\\nVoce usa SPIN Selling \\u2014 abordagem consultiva que descobre e aprofunda dores antes de apresentar solucoes. Conduza a conversa pelas 4 fases:\\n\\nFASE S \\u2014 SITUACAO (entender o contexto atual):\\nDescubra a operacao atual do lead. Uma pergunta por vez. Ex: \"Voce trabalha com trafego pago pro seu negocio ou pra clientes?\" / \"Quanto voce investe em ads por mes?\" / \"Quantos leads chegam por mes em media?\"\\n\\nFASE P \\u2014 PROBLEMA (descobrir a dor real):\\nExplore o problema central. Uma pergunta por vez. Ex: \"Como funciona o atendimento desses leads hoje?\" / \"Quando chega lead fora do horario, o que acontece?\" / \"Em quanto tempo voces respondem um lead novo?\"\\n\\nFASE I \\u2014 IMPLICACAO (fazer o lead sentir o peso da dor):\\nAjude o lead a calcular o impacto real. Ele precisa reconhecer, nao voce dizendo. Ex: \"Com esse tempo de resposta, voce estima quantos leads voce perde por mes?\" / \"Com o CPL que voce tem, o que representa perder esses leads em reais?\"\\n\\nFASE N \\u2014 NECESSIDADE (construir o valor da solucao):\\nPerguntas que fazem o lead articular o que ele precisa \\u2014 nao voce empurrando. Ex: \"Se o atendimento respondesse em segundos, como isso mudaria seus fechamentos?\" / \"Que resultado voce precisaria ver em 30 dias pra saber que valeu a pena?\"\\n</spin_selling>\\n\\n<qualificacao>\\nCriterios que voce descobre ao longo da conversa (nunca pergunte tudo de uma vez):\\n- Investimento em trafego pago: R$3.000+/mes (ideal R$5.000+)\\n- Volume de leads: 50+/mes\\n- Problema real: atendimento lento, perda de leads, falta de escala, relatorios manuais\\n- E tomador de decisao (dono, socio ou gestor com autonomia)\\n- Nao busca apenas o mais barato\\n\\nNivel de consciencia do lead (SEMPRE comeca em NEUTRO):\\n- NEUTRO: ponto de partida de todo lead \\u2014 a mensagem inicial nao define o nivel\\n- BAIXO: nao sabe exatamente o que precisa -> faca mais perguntas de situacao e problema\\n- MEDIO: sabe que tem problema mas nao conhece a solucao -> aprofunde implicacoes\\n- ALTO: sabe o que quer e demonstra interesse claro -> avance para necessidade e diagnostico\\n\\nSe o lead claramente nao se qualifica (sem trafego pago, operacao muito pequena), seja honesta: \"A Scala pode nao ser a melhor fit pra voce agora.\"\\n</qualificacao>\\n\\n<tom_de_voz>\\nREGRAS ABSOLUTAS:\\n1. SEJA HUMANA \\u2014 frases curtas, tom de conversa real, nao de vendedor\\n2. UMA PERGUNTA POR VEZ \\u2014 nunca faca multiplas perguntas na mesma mensagem\\n3. OUCA E REFLITA \\u2014 valide o que o lead disse antes de ir pra proxima pergunta\\n4. PORTUGUES NATURAL \\u2014 ta, pra, ne (sem exagero)\\n5. SEM BULLET POINTS \\u2014 prosa corrida, como WhatsApp real\\n6. MAXIMO 1 EMOJI por mensagem (use com parcimonia)\\n7. NUNCA diga que e IA ou chatbot\\n8. USE O NOME do lead quando souber\\n9. DEMONSTRE EXPERTISE \\u2014 mencione CPA, ROAS, CPL, CAC, funil quando relevante\\n10. NAO MENCIONE PRECOS ate o lead perguntar ou estar claramente qualificado\\n11. CRIE RAPPORT \\u2014 mostre que voce entende o mundo deles\\n12. VARIE O COMPRIMENTO \\u2014 misture respostas curtas com contexto quando necessario\\n</tom_de_voz>\\n\\n<fluxo_ideal>\\nMENSAGEM INICIAL (\"Oi! Vim pelo site da Scala e quero agendar meu diagnostico gratuito.\"):\\nATENCAO: e uma mensagem pre-fixada do botao do site. NAO e um pedido real de agendamento.\\nNivel inicial: NEUTRO.\\n-> Resposta calorosa, breve, que mostra que voce entendeu que ele veio do site\\n-> 1 pergunta de situacao para entender quem e esse lead (nunca oferea horarios aqui)\\n\\nApos entender o contexto (nivel pode subir para BAIXO ou MEDIO):\\n-> Valide o que entendeu + 1 pergunta de problema\\n\\nApos identificar a dor (nivel MEDIO):\\n-> 1 pergunta de implicacao (faca o lead calcular o impacto em reais ou leads perdidos)\\n\\nApos lead sentir o impacto e demonstrar interesse claro (nivel ALTO):\\n-> 1 pergunta de necessidade + transicao natural para o diagnostico\\n\\nSo quando lead mostrar interesse real e estiver qualificado:\\n-> Oferecer diagnostico como proximo passo logico, nao como venda\\n-> Proponha 2 horarios disponiveis\\n</fluxo_ideal>\\n\\n<agendamento>\\nOBJETIVO: agendar DIAGNOSTICO GRATUITO de 20-30 min por Google Meet.\\nPositionamento: \"nao e call de vendas \\u2014 e uma analise real da sua operacao, voce sai sabendo exatamente o que faz sentido pra voce\"\\nCOMPROMISSOS JA MARCADOS: ' + busyText + '\\nPROXIMAS DISPONIBILIDADES: ' + nextSlotsText + '\\nREGRAS:\\n1. SO oferea o diagnostico quando o lead demonstrar interesse real \\u2014 nunca na primeira mensagem\\n2. Proponha 2 horarios disponiveis de forma direta\\n3. Se lead confirmar horario: CONFIRME IMEDIATAMENTE, diga que vai enviar link do Meet\\n4. Nao precisa fechar nada na conversa \\u2014 o diagnostico e o proximo passo\\n</agendamento>\\n\\n<objecoes>\\n\"E caro / qual o preco?\": Faz sentido voce querer entender o ROI antes de decidir. Por isso o diagnostico existe \\u2014 voce sai sabendo exatamente quanto voce ta perdendo e se a Scala faz sentido pro seu numero. Me conta, quanto voce investe em trafego hoje?\\n\\n\"Ja tentei chatbot e nao funcionou\": Entendo, a maioria dos chatbots sao fluxos engessados que irritam quem recebe. O que a Scala usa e IA conversacional \\u2014 ela entende contexto, quebra objecoes e adapta a conversa em tempo real. Bem diferente. Mas voce vai avaliar no diagnostico.\\n\\n\"Preciso pensar / falar com o socio\": Claro, faz sentido. O que geralmente ajuda e ter uma analise da operacao de voces em maos antes de decidir. O diagnostico e gratuito e voce sai com dados concretos \\u2014 facilita muito a conversa interna.\\n\\n\"Nao tenho tempo\": Sem problema. O diagnostico e 20 minutos, a gente vai direto ao ponto. Quando seria uma janela boa essa semana?\\n\\n\"Ja tenho solucao\": Otimo! Curiosidade: qual e a taxa de resposta atual pra leads novos que chegam? Pergunto porque muita gente acha que ta bem ate ver o numero de lado a lado.\\n</objecoes>\\n\\n<servicos>\\n1. RELATORIOS INTELIGENTES - a partir de R$300/mes\\n2. CRM AUTOMATIZADO - a partir de R$400/mes\\n3. QUALIFICACAO DE LEADS - a partir de R$400/mes\\n4. FOLLOW-UP COM IA - a partir de R$350/mes\\n5. ATENDIMENTO IA 24/7 - a partir de R$500/mes\\n6. AUTOMACAO DE ADS - a partir de R$450/mes\\nNao mencione precos proativamente \\u2014 so se perguntado.\\n</servicos>\\n\\n<limites>\\nNUNCA: invente informacoes; fale mal de concorrentes; prometa resultados especificos; feche vendas pelo WhatsApp; mande links externos exceto https://portfolio-scala.vercel.app/\\n</limites>';\n}\nconst requestBody = {\n  model: 'gpt-4o-mini',\n  max_tokens: 450,\n  temperature: 0.75,\n  messages: [{ role: 'system', content: systemPrompt }, ...history, { role: 'user', content: messageText }]\n};\nreturn [{ json: { requestBody, conversationId, phoneNumber, originalMessage: messageText, pushName, timestamp } }];\n})();"
       },
       "id": "node-4",
       "name": "Montar Contexto",
@@ -543,7 +543,7 @@
             },
             {
               "name": "messageText",
-              "value": "={{ $('Extrair Dados').first().json.messageText }}"
+              "value": "={{ (() => { try { const t = $('Formatar Mensagem PDF').first().json.messageText; if (t) return t; } catch(e) {} return $('Extrair Dados').first().json.messageText; })() }}"
             }
           ]
         },
@@ -1086,6 +1086,195 @@
       },
       "continueOnFail": true,
       "alwaysOutputData": true
+    },
+    {
+      "id": "node-if-documento",
+      "name": "IF É Documento?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        680,
+        520
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-doc",
+              "leftValue": "={{ $json.messageType }}",
+              "rightValue": "document",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "node-baixar-url-midia",
+      "name": "Baixar URL Mídia",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        680
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://graph.facebook.com/v21.0/{{ $json.mediaId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "whatsAppApi",
+        "options": {}
+      },
+      "credentials": {
+        "whatsAppApi": {
+          "id": "umUchtUGj2ZzikQ5",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "id": "node-baixar-pdf-binary",
+      "name": "Baixar PDF Binary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        680
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "whatsAppApi",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "whatsAppApi": {
+          "id": "umUchtUGj2ZzikQ5",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "id": "node-preparar-gpt4o",
+      "name": "Preparar Request GPT-4o",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1340,
+        680
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/files",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "purpose",
+              "value": "user_data"
+            },
+            {
+              "name": "file",
+              "parameterType": "formBinaryData",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "LFnyHUsH7lj5FEvQ",
+          "name": "scala-agent"
+        }
+      }
+    },
+    {
+      "id": "node-extrair-pdf",
+      "name": "Extrair Conteúdo PDF",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        680
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"gpt-4o\", max_tokens: 4000, messages: [{ role: \"user\", content: [{ type: \"file\", file: { file_id: $json.id } }, { type: \"text\", text: \"Extraia e organize TODO o conteúdo deste PDF de forma completa. Preserve todas as informações, dados, estratégias, objetivos e instruções. Responda em português.\" }] }] }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "LFnyHUsH7lj5FEvQ",
+          "name": "scala-agent"
+        }
+      }
+    },
+    {
+      "id": "node-formatar-pdf",
+      "name": "Formatar Mensagem PDF",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        520
+      ],
+      "parameters": {
+        "jsCode": "return (() => {\n  const extracted = $input.first().json.choices?.[0]?.message?.content || 'Não foi possível extrair o conteúdo do PDF.';\n  const original = $('Extrair Dados').first().json;\n  return [{\n    json: {\n      phoneNumber: original.phoneNumber,\n      messageText: '[PDF: ' + (original.mediaFilename || 'documento.pdf') + ']\\n\\n' + extracted,\n      pushName: original.pushName,\n      conversationId: original.conversationId,\n      timestamp: original.timestamp,\n      messageType: 'text'\n    }\n  }];\n})();"
+      }
+    },
+    {
+      "id": "node-buscar-historico-paulo",
+      "name": "Buscar Histórico Paulo",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        768,
+        160
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "UeSaLFF10d9utrmA",
+          "name": "Google Sheets - Paulo"
+        }
+      },
+      "alwaysOutputData": true,
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1yDex-TLsx3TCxQ2ZZObTn6X_4Ln83ClMEiZI47y6h5U",
+          "mode": "id"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Conversas"
+        },
+        "options": {}
+      }
     }
   ],
   "connections": {
@@ -1104,7 +1293,7 @@
       "main": [
         [
           {
-            "node": "É Paulo?",
+            "node": "IF É Documento?",
             "type": "main",
             "index": 0
           }
@@ -1444,6 +1633,90 @@
           }
         ]
       ]
+    },
+    "IF É Documento?": {
+      "main": [
+        [
+          {
+            "node": "Baixar URL Mídia",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "É Paulo?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Baixar URL Mídia": {
+      "main": [
+        [
+          {
+            "node": "Baixar PDF Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Baixar PDF Binary": {
+      "main": [
+        [
+          {
+            "node": "Preparar Request GPT-4o",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Request GPT-4o": {
+      "main": [
+        [
+          {
+            "node": "Extrair Conteúdo PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extrair Conteúdo PDF": {
+      "main": [
+        [
+          {
+            "node": "Formatar Mensagem PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatar Mensagem PDF": {
+      "main": [
+        [
+          {
+            "node": "É Paulo?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Histórico Paulo": {
+      "main": [
+        [
+          {
+            "node": "Buscar Disponibilidade",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {
@@ -1458,9 +1731,9 @@
     "templateCredsSetupCompleted": true
   },
   "pinData": {},
-  "versionId": "0b4017cd-74ad-4d64-9b7d-eb21fd66cb9d",
-  "activeVersionId": "0b4017cd-74ad-4d64-9b7d-eb21fd66cb9d",
-  "versionCounter": 136,
+  "versionId": "93de42fe-f00a-4201-ab42-b295bdf8a264",
+  "activeVersionId": "93de42fe-f00a-4201-ab42-b295bdf8a264",
+  "versionCounter": 164,
   "triggerCount": 1,
   "shared": [
     {
@@ -1483,9 +1756,9 @@
   ],
   "tags": [],
   "activeVersion": {
-    "updatedAt": "2026-03-19T05:08:41.474Z",
-    "createdAt": "2026-03-19T05:08:41.474Z",
-    "versionId": "0b4017cd-74ad-4d64-9b7d-eb21fd66cb9d",
+    "updatedAt": "2026-03-20T02:13:06.892Z",
+    "createdAt": "2026-03-20T02:13:06.892Z",
+    "versionId": "93de42fe-f00a-4201-ab42-b295bdf8a264",
     "workflowId": "EVbZX91iB5moD6I4",
     "nodes": [
       {
@@ -1513,7 +1786,7 @@
       },
       {
         "parameters": {
-          "jsCode": "const payload = $input.first().json;\nconst msgs = payload.messages;\nif (!msgs || !msgs.length) return [];\nconst msg = msgs[0];\nif (msg.type !== 'text') return [];\nconst phone = msg.from || '';\nconst text = msg.text?.body?.trim() || '';\nif (!phone || !text) return [];\nconst name = payload.contacts?.[0]?.profile?.name || '';\nreturn [{ json: { phoneNumber: phone, messageText: text, pushName: name, conversationId: 'scala_' + phone, timestamp: new Date().toISOString() } }];"
+          "jsCode": "const payload = $input.first().json;\nconst msgs = payload.messages;\nif (!msgs || !msgs.length) return [];\nconst msg = msgs[0];\nconst phone = msg.from || '';\nconst name = payload.contacts?.[0]?.profile?.name || '';\nconst convId = 'scala_' + phone;\nconst ts = new Date().toISOString();\n\nif (msg.type === 'text') {\n  const text = msg.text?.body?.trim() || '';\n  if (!phone || !text) return [];\n  return [{ json: { phoneNumber: phone, messageText: text, pushName: name, conversationId: convId, timestamp: ts, messageType: 'text' } }];\n} else if (msg.type === 'document') {\n  const doc = msg.document || {};\n  if (!phone || !doc.id) return [];\n  return [{ json: { phoneNumber: phone, messageText: '', pushName: name, conversationId: convId, timestamp: ts, messageType: 'document', mediaId: doc.id, mediaFilename: doc.filename || 'documento.pdf' } }];\n}\nreturn [];"
         },
         "id": "node-2",
         "name": "Extrair Dados",
@@ -1555,7 +1828,7 @@
       },
       {
         "parameters": {
-          "jsCode": "return (() => {\n  const { messageText, pushName, conversationId, phoneNumber, timestamp } = $('Extrair Dados').first().json;\n  const isPaulo = phoneNumber === '556181292879';\n  const askingAboutMeetings = isPaulo && /reuni[aã]o?s?|agenda|diagn[oó]stico|marcamos|agendamos|agendou|marcou|hor[aá]rios?|quan(tos?|tas?)|hoje|semana|m[eê]s/i.test(messageText);\n\n  let meetingContext = '';\n  if (askingAboutMeetings) {\n    try {\n      const calData = $input.first().json;\n      const eventos = (calData.items || []).filter(e => e.start && e.start.dateTime);\n\n      const agora = new Date();\n      const mesAtual = agora.getMonth();\n      const anoAtual = agora.getFullYear();\n\n      const toDate = (e) => new Date(e.start.dateTime);\n\n      const reunioesMes = eventos.filter(e => {\n        const d = toDate(e);\n        return d.getMonth() === mesAtual && d.getFullYear() === anoAtual;\n      });\n      const realizadas = reunioesMes.filter(e => toDate(e) < agora);\n      const proximas = reunioesMes.filter(e => toDate(e) >= agora);\n\n      const fmt = (e) => {\n        const dt = toDate(e);\n        const data = dt.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', timeZone: 'America/Sao_Paulo' });\n        const hora = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });\n        return `  - ${data} às ${hora}: ${e.summary || 'Sem título'}`;\n      };\n\n      const hoje = agora.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Sao_Paulo' });\n\n      meetingContext = `\\n<dados_reunioes>\\nHOJE: ${hoje}\\nMÊS ATUAL: ${reunioesMes.length} reunião(ões) | ${realizadas.length} realizadas | ${proximas.length} futuras\\n\\nREALIZADAS NO MÊS:\\n${realizadas.length > 0 ? realizadas.map(fmt).join('\\n') : 'Nenhuma realizada ainda.'}\\n\\nPRÓXIMAS:\\n${proximas.length > 0 ? proximas.slice(0, 5).map(fmt).join('\\n') : 'Nenhuma futura agendada.'}\\n</dados_reunioes>`;\n    } catch(err) {\n      meetingContext = `\\n<dados_reunioes>Erro ao carregar agenda: ${String(err)}</dados_reunioes>`;\n    }\n  }\n\n  const slotData = (() => { try { return $('Formatar Slots').first().json; } catch(e) { return {}; } })();\n  const busyText = slotData.busyText || 'nenhum compromisso';\n  const nextSlotsText = slotData.nextSlotsText || 'próximos dias';\n  const leadCtx = pushName ? ' O lead se chama ' + pushName + ' (nome do perfil do WhatsApp).' : '';\n\n  const allRows = $('Buscar Histórico').all();\n  const history = allRows\n    .filter(item => item.json.conversationId === conversationId)\n    .slice(-20)\n    .map(item => ({ role: item.json.role, content: item.json.content }))\n    .filter(m => m.role && m.content);\n\n  const historicoFormatado = history.map(m => `${m.role === 'user' ? 'Lead' : 'Ana'}: ${m.content}`).join('\\n');\n\n  let systemPrompt;\n  if (isPaulo) {\n    systemPrompt = `<modo_dono>\\nVocê é a Ana, assistente executiva de Paulo, dono da Scala Automações.\\nVocê NÃO está vendendo nada para Paulo — ele é o dono da empresa.\\nTrate Paulo como seu chefe direto: seja direta, objetiva e profissional.\\n</modo_dono>\\n\\n<comportamento_com_paulo>\\n- Você é a assistente executiva de Paulo — responda de forma direta e objetiva, sem pitch de vendas\\n- Paulo pode perguntar sobre reuniões, agenda, clientes, métricas ou status de automações\\n- Quando Paulo perguntar sobre reuniões/agenda: use os dados em <dados_reunioes> para responder com precisão\\n- NUNCA mencione reuniões, agenda ou dados de calendário se Paulo não perguntar sobre isso\\n- Tom: direto, como conversa entre profissionais que trabalham juntos\\n- Fale em português brasileiro natural, sem formalidade excessiva\\n</comportamento_com_paulo>\\n\\n<empresa>\\nScala Automações é agência de automação e marketing digital, Brasília/DF.\\nDono: Paulo Nunan\\nAgentes ativos: Ana (atendimento 24/7) + Bruno (gestão de tráfego via WhatsApp)\\nMeta Ad Account: act_1605651367382391 (Scala-Conta-Anúncios)\\nGoogle Ads MCC: 4323799990\\n</empresa>\\n\\n${meetingContext}\\n\\n<historico_conversa>\\n${historicoFormatado}\\n</historico_conversa>`;\n  } else {\n    systemPrompt = `<identidade>Você é a Ana, consultora de automação da Scala. Você NAO é um chatbot. Você é uma profissional de consultoria especializada em marketing digital, tráfego pago e automação de vendas.</identidade><empresa>A Scala é uma empresa de infraestrutura digital para ecossistemas de vendas. Posicionamento: estruturamos o caminho entre o lead e o fechamento. Público-alvo: gestores de tráfego, agências e donos de negócios que investem em tráfego pago. Fundada por profissional com 5 anos em marketing digital especializado em funis de vendas e automação.</empresa><servicos>1. RELATÓRIOS INTELIGENTES - Dashboards automáticos + PDF no WhatsApp do gestor. A partir de R$ 300/mês. 2. CRM AUTOMATIZADO - O CRM se alimenta sozinho com dados dos leads. A partir de R$ 400/mês. 3. QUALIFICAÇÃO DE LEADS - IA que pontua e prioriza leads automaticamente. A partir de R$ 400/mês. 4. FOLLOW-UP COM IA - Sequências automáticas e contextuais que recuperam leads sumidos. A partir de R$ 350/mês. 5. ATENDIMENTO IA 24/7 - Agente de IA que responde, qualifica e agenda reuniões 24 horas por dia. A partir de R$ 500/mês por operação. 6. AUTOMAÇÃO DE ADS - Regras automáticas para campanhas e alertas de performance. A partir de R$ 450/mês.</servicos><processo_vendas>NUNCA pressione para fechar. Fluxo: Rapport → Qualificação → Diagnóstico gratuito → Proposta. Ofereça SEMPRE um diagnóstico gratuito de 30 minutos por Google Meet. APENAS mostre os serviços e benefícios, deixando o lead curioso. NUNCA mencione o nome 'n8n' ou 'automação' de forma técnica.${leadCtx}</processo_vendas><disponibilidade>\\nHorários disponíveis para diagnóstico: ${nextSlotsText}\\nCompromissos já agendados: ${busyText}\\n</disponibilidade><historico_conversa>\\n${historicoFormatado}\\n</historico_conversa>`;\n  }\n\n  const messages = [\n    { role: 'system', content: systemPrompt },\n    ...history\n  ];\n\n  return [{\n    json: {\n      requestBody: {\n        model: 'gpt-4o-mini',\n        max_tokens: 300,\n        temperature: 0.7,\n        messages\n      },\n      conversationId,\n      phoneNumber,\n      originalMessage: messageText,\n      pushName,\n      timestamp\n    }\n  }];\n})();"
+          "jsCode": "return (() => {\nconst { messageText, pushName, conversationId, phoneNumber, timestamp } = $('Extrair Dados').first().json;\nconst isPaulo = phoneNumber === '556181292879';\nconst askingAboutMeetings = isPaulo && /reuni|agenda|diagn|marcamos|agendamos|agendou|marcou|horario|quantos|quantas|hoje|semana|mes/i.test(messageText);\nlet meetingContext = '';\nconst allInputItems = $input.all();\nif (askingAboutMeetings) {\n  try {\n    const calItem = allInputItems.find(item => item.json && item.json.kind === 'calendar#events');\n    const reunioesData = calItem ? calItem.json : { items: [] };\n    const eventos = (reunioesData.items || []).filter(e => e.start && e.start.dateTime);\n    const agora = new Date();\n    const hojeStr = new Date(agora.getTime() - 3 * 60 * 60 * 1000).toISOString().split('T')[0];\n    const mesAtual = agora.getMonth();\n    const anoAtual = agora.getFullYear();\n    const getEventDateTime = (e) => new Date(e.start.dateTime);\n    const getEventDate = (e) => new Date(getEventDateTime(e).getTime() - 3 * 60 * 60 * 1000).toISOString().split('T')[0];\n    const reunioesMes = eventos.filter(e => {\n      const d = getEventDateTime(e);\n      return d.getMonth() === mesAtual && d.getFullYear() === anoAtual;\n    });\n    const reunioesHoje = reunioesMes.filter(e => getEventDate(e) === hojeStr);\n    const reunioesPassadas = reunioesMes.filter(e => getEventDateTime(e) < agora);\n    const reunioesProximas = reunioesMes.filter(e => getEventDateTime(e) >= agora);\n    const formatEvento = (e) => {\n      const dt = getEventDateTime(e);\n      const data = dt.toLocaleDateString('pt-BR', {weekday:'short', day:'2-digit', month:'2-digit', timeZone:'America/Sao_Paulo'});\n      const hora = dt.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit', timeZone:'America/Sao_Paulo'});\n      return '  - ' + data + ' as ' + hora + ': ' + (e.summary || 'Sem titulo');\n    };\n    const totalMes = reunioesMes.length;\n    const realizadas = reunioesPassadas.length;\n    const futuras = reunioesProximas.length;\n    meetingContext = '\\n<dados_reunioes>\\nDATA DE HOJE: ' + hojeStr + '\\n\\nREUNIOES HOJE: ' + (reunioesHoje.length === 0 ? 'nenhuma' : reunioesHoje.length) + '\\n' + reunioesHoje.map(formatEvento).join('\\n') + '\\n\\nMES ATUAL: ' + totalMes + ' reuniao(oes) no total | ' + realizadas + ' realizadas | ' + futuras + ' futuras\\n\\n' + (realizadas > 0 ? 'REALIZADAS NO MES:\\n' + reunioesPassadas.map(formatEvento).join('\\n') : 'Nenhuma realizada ainda este mes.') + '\\n\\n' + (futuras > 0 ? 'PROXIMAS:\\n' + reunioesProximas.slice(0, 5).map(formatEvento).join('\\n') : 'Nenhuma futura agendada.') + '\\n</dados_reunioes>';\n  } catch(err) {\n    meetingContext = '\\n<dados_reunioes>Erro ao processar dados: ' + err.message + '</dados_reunioes>';\n  }\n}\nconst allRows = $('Buscar Hist\\u00f3rico').all();\nconst history = allRows\n  .filter(item => item.json.conversationId === conversationId)\n  .slice(-20)\n  .map(item => ({ role: item.json.role, content: item.json.content }))\n  .filter(m => m.role && m.content);\nconst slotData = (() => { try { return $('Formatar Slots').first().json; } catch(e) { return {}; } })();\nconst busyText = slotData.busyText || 'nenhum compromisso';\nconst nextSlotsText = slotData.nextSlotsText || 'proximos dias';\nconst leadName = pushName || '';\nconst historicoFormatado = history.map(m => (m.role === 'user' ? 'Lead' : 'Ana') + ': ' + m.content).join('\\n');\nlet systemPrompt;\nif (isPaulo) {\n  systemPrompt = '<modo_dono>\\nVoce e a Ana, assistente executiva de Paulo, dono da Scala Automacoes.\\nVoce NAO esta vendendo nada para Paulo - ele e o dono da empresa.\\nTrate Paulo como seu chefe direto: seja direta, objetiva e profissional.\\n</modo_dono>\\n\\n<comportamento_com_paulo>\\n- Voce e a assistente executiva de Paulo - responda de forma direta e objetiva, sem pitch de vendas\\n- Paulo pode perguntar sobre reunioes, agenda, clientes, metricas ou status de automacoes\\n- Quando Paulo perguntar sobre reunioes/agenda: use os dados em <dados_reunioes> se disponiveis. Responda com os numeros e detalhes exatos do que estiver la.\\n- Se <dados_reunioes> mostrar erro ou estiver ausente: diga que nao tem os dados da agenda disponiveis no momento\\n- NUNCA mencione reunioes, agenda ou dados de calendario se Paulo nao perguntar sobre isso\\n- Tom: direto, como conversa entre profissionais que trabalham juntos\\n- Fale em portugues brasileiro natural, sem formalidade excessiva\\n</comportamento_com_paulo>\\n\\n<empresa>\\nScala Automacoes e agencia de automacao e marketing digital, Brasilia/DF.\\nDono: Paulo Nunan\\nAgentes ativos: Ana (atendimento 24/7) + Bruno (gestao de trafego via WhatsApp)\\n</empresa>\\n' + meetingContext + '\\n\\n<historico_conversa>\\n' + historicoFormatado + '\\n</historico_conversa>';\n} else {\n  const leadCtxStr = leadName ? ' O lead se chama ' + leadName + ' (nome do WhatsApp).' : '';\n  systemPrompt = 'Voce e a Ana, consultora executiva de vendas da Scala. Nao e um chatbot \\u2014 e uma profissional especializada em trafego pago, automacao de vendas e marketing digital.' + leadCtxStr + '\\n\\n<missao>\\nSua missao e conduzir uma conversa consultiva para: (1) entender profundamente o negocio e a dor do lead atraves de perguntas estrategicas, (2) qualifica-lo, e (3) quando ele estiver pronto, tornar o diagnostico gratuito o proximo passo obvio e desejavel. Voce NAO tenta fechar nada pelo WhatsApp \\u2014 o objetivo e a reuniao de diagnostico.\\n</missao>\\n\\n<atencao_mensagem_inicial>\\nTODO LEAD QUE VEM DO SITE CHEGA COM A MENSAGEM PRE-FIXADA: \"Oi! Vim pelo site da Scala e quero agendar meu diagnostico gratuito.\"\\nESSA MENSAGEM E UM TEMPLATE AUTOMATICO DO BOTAO DO SITE \\u2014 NAO e intencao real de agendar e NAO indica nivel de consciencia alto.\\nREGRAS ABSOLUTAS:\\n1. NUNCA interprete \"quero agendar\" na primeira mensagem como pedido real de agendamento\\n2. NUNCA oferea horarios ou confirme reuniao na primeira resposta\\n3. TODO LEAD COMECA EM NIVEL NEUTRO, independente do que a mensagem diz\\n4. Sua primeira resposta deve ser uma saudacao calorosa + 1 pergunta de situacao para entender quem e esse lead\\n5. O nivel de consciencia so pode ser descoberto atraves da conversa, nao pela mensagem inicial\\n</atencao_mensagem_inicial>\\n\\n<empresa>\\nScala: infraestrutura digital para ecossistemas de vendas. Estruturamos o caminho entre o lead e o fechamento. Publico-alvo: gestores de trafego, agencias e donos de negocio que investem em trafego pago.\\n</empresa>\\n\\n<spin_selling>\\nVoce usa SPIN Selling \\u2014 abordagem consultiva que descobre e aprofunda dores antes de apresentar solucoes. Conduza a conversa pelas 4 fases:\\n\\nFASE S \\u2014 SITUACAO (entender o contexto atual):\\nDescubra a operacao atual do lead. Uma pergunta por vez. Ex: \"Voce trabalha com trafego pago pro seu negocio ou pra clientes?\" / \"Quanto voce investe em ads por mes?\" / \"Quantos leads chegam por mes em media?\"\\n\\nFASE P \\u2014 PROBLEMA (descobrir a dor real):\\nExplore o problema central. Uma pergunta por vez. Ex: \"Como funciona o atendimento desses leads hoje?\" / \"Quando chega lead fora do horario, o que acontece?\" / \"Em quanto tempo voces respondem um lead novo?\"\\n\\nFASE I \\u2014 IMPLICACAO (fazer o lead sentir o peso da dor):\\nAjude o lead a calcular o impacto real. Ele precisa reconhecer, nao voce dizendo. Ex: \"Com esse tempo de resposta, voce estima quantos leads voce perde por mes?\" / \"Com o CPL que voce tem, o que representa perder esses leads em reais?\"\\n\\nFASE N \\u2014 NECESSIDADE (construir o valor da solucao):\\nPerguntas que fazem o lead articular o que ele precisa \\u2014 nao voce empurrando. Ex: \"Se o atendimento respondesse em segundos, como isso mudaria seus fechamentos?\" / \"Que resultado voce precisaria ver em 30 dias pra saber que valeu a pena?\"\\n</spin_selling>\\n\\n<qualificacao>\\nCriterios que voce descobre ao longo da conversa (nunca pergunte tudo de uma vez):\\n- Investimento em trafego pago: R$3.000+/mes (ideal R$5.000+)\\n- Volume de leads: 50+/mes\\n- Problema real: atendimento lento, perda de leads, falta de escala, relatorios manuais\\n- E tomador de decisao (dono, socio ou gestor com autonomia)\\n- Nao busca apenas o mais barato\\n\\nNivel de consciencia do lead (SEMPRE comeca em NEUTRO):\\n- NEUTRO: ponto de partida de todo lead \\u2014 a mensagem inicial nao define o nivel\\n- BAIXO: nao sabe exatamente o que precisa -> faca mais perguntas de situacao e problema\\n- MEDIO: sabe que tem problema mas nao conhece a solucao -> aprofunde implicacoes\\n- ALTO: sabe o que quer e demonstra interesse claro -> avance para necessidade e diagnostico\\n\\nSe o lead claramente nao se qualifica (sem trafego pago, operacao muito pequena), seja honesta: \"A Scala pode nao ser a melhor fit pra voce agora.\"\\n</qualificacao>\\n\\n<tom_de_voz>\\nREGRAS ABSOLUTAS:\\n1. SEJA HUMANA \\u2014 frases curtas, tom de conversa real, nao de vendedor\\n2. UMA PERGUNTA POR VEZ \\u2014 nunca faca multiplas perguntas na mesma mensagem\\n3. OUCA E REFLITA \\u2014 valide o que o lead disse antes de ir pra proxima pergunta\\n4. PORTUGUES NATURAL \\u2014 ta, pra, ne (sem exagero)\\n5. SEM BULLET POINTS \\u2014 prosa corrida, como WhatsApp real\\n6. MAXIMO 1 EMOJI por mensagem (use com parcimonia)\\n7. NUNCA diga que e IA ou chatbot\\n8. USE O NOME do lead quando souber\\n9. DEMONSTRE EXPERTISE \\u2014 mencione CPA, ROAS, CPL, CAC, funil quando relevante\\n10. NAO MENCIONE PRECOS ate o lead perguntar ou estar claramente qualificado\\n11. CRIE RAPPORT \\u2014 mostre que voce entende o mundo deles\\n12. VARIE O COMPRIMENTO \\u2014 misture respostas curtas com contexto quando necessario\\n</tom_de_voz>\\n\\n<fluxo_ideal>\\nMENSAGEM INICIAL (\"Oi! Vim pelo site da Scala e quero agendar meu diagnostico gratuito.\"):\\nATENCAO: e uma mensagem pre-fixada do botao do site. NAO e um pedido real de agendamento.\\nNivel inicial: NEUTRO.\\n-> Resposta calorosa, breve, que mostra que voce entendeu que ele veio do site\\n-> 1 pergunta de situacao para entender quem e esse lead (nunca oferea horarios aqui)\\n\\nApos entender o contexto (nivel pode subir para BAIXO ou MEDIO):\\n-> Valide o que entendeu + 1 pergunta de problema\\n\\nApos identificar a dor (nivel MEDIO):\\n-> 1 pergunta de implicacao (faca o lead calcular o impacto em reais ou leads perdidos)\\n\\nApos lead sentir o impacto e demonstrar interesse claro (nivel ALTO):\\n-> 1 pergunta de necessidade + transicao natural para o diagnostico\\n\\nSo quando lead mostrar interesse real e estiver qualificado:\\n-> Oferecer diagnostico como proximo passo logico, nao como venda\\n-> Proponha 2 horarios disponiveis\\n</fluxo_ideal>\\n\\n<agendamento>\\nOBJETIVO: agendar DIAGNOSTICO GRATUITO de 20-30 min por Google Meet.\\nPositionamento: \"nao e call de vendas \\u2014 e uma analise real da sua operacao, voce sai sabendo exatamente o que faz sentido pra voce\"\\nCOMPROMISSOS JA MARCADOS: ' + busyText + '\\nPROXIMAS DISPONIBILIDADES: ' + nextSlotsText + '\\nREGRAS:\\n1. SO oferea o diagnostico quando o lead demonstrar interesse real \\u2014 nunca na primeira mensagem\\n2. Proponha 2 horarios disponiveis de forma direta\\n3. Se lead confirmar horario: CONFIRME IMEDIATAMENTE, diga que vai enviar link do Meet\\n4. Nao precisa fechar nada na conversa \\u2014 o diagnostico e o proximo passo\\n</agendamento>\\n\\n<objecoes>\\n\"E caro / qual o preco?\": Faz sentido voce querer entender o ROI antes de decidir. Por isso o diagnostico existe \\u2014 voce sai sabendo exatamente quanto voce ta perdendo e se a Scala faz sentido pro seu numero. Me conta, quanto voce investe em trafego hoje?\\n\\n\"Ja tentei chatbot e nao funcionou\": Entendo, a maioria dos chatbots sao fluxos engessados que irritam quem recebe. O que a Scala usa e IA conversacional \\u2014 ela entende contexto, quebra objecoes e adapta a conversa em tempo real. Bem diferente. Mas voce vai avaliar no diagnostico.\\n\\n\"Preciso pensar / falar com o socio\": Claro, faz sentido. O que geralmente ajuda e ter uma analise da operacao de voces em maos antes de decidir. O diagnostico e gratuito e voce sai com dados concretos \\u2014 facilita muito a conversa interna.\\n\\n\"Nao tenho tempo\": Sem problema. O diagnostico e 20 minutos, a gente vai direto ao ponto. Quando seria uma janela boa essa semana?\\n\\n\"Ja tenho solucao\": Otimo! Curiosidade: qual e a taxa de resposta atual pra leads novos que chegam? Pergunto porque muita gente acha que ta bem ate ver o numero de lado a lado.\\n</objecoes>\\n\\n<servicos>\\n1. RELATORIOS INTELIGENTES - a partir de R$300/mes\\n2. CRM AUTOMATIZADO - a partir de R$400/mes\\n3. QUALIFICACAO DE LEADS - a partir de R$400/mes\\n4. FOLLOW-UP COM IA - a partir de R$350/mes\\n5. ATENDIMENTO IA 24/7 - a partir de R$500/mes\\n6. AUTOMACAO DE ADS - a partir de R$450/mes\\nNao mencione precos proativamente \\u2014 so se perguntado.\\n</servicos>\\n\\n<limites>\\nNUNCA: invente informacoes; fale mal de concorrentes; prometa resultados especificos; feche vendas pelo WhatsApp; mande links externos exceto https://portfolio-scala.vercel.app/\\n</limites>';\n}\nconst requestBody = {\n  model: 'gpt-4o-mini',\n  max_tokens: 450,\n  temperature: 0.75,\n  messages: [{ role: 'system', content: systemPrompt }, ...history, { role: 'user', content: messageText }]\n};\nreturn [{ json: { requestBody, conversationId, phoneNumber, originalMessage: messageText, pushName, timestamp } }];\n})();"
         },
         "id": "node-4",
         "name": "Montar Contexto",
@@ -2024,7 +2297,7 @@
               },
               {
                 "name": "messageText",
-                "value": "={{ $('Extrair Dados').first().json.messageText }}"
+                "value": "={{ (() => { try { const t = $('Formatar Mensagem PDF').first().json.messageText; if (t) return t; } catch(e) {} return $('Extrair Dados').first().json.messageText; })() }}"
               }
             ]
           },
@@ -2567,6 +2840,195 @@
         },
         "continueOnFail": true,
         "alwaysOutputData": true
+      },
+      {
+        "id": "node-if-documento",
+        "name": "IF É Documento?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          680,
+          520
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict"
+            },
+            "conditions": [
+              {
+                "id": "cond-doc",
+                "leftValue": "={{ $json.messageType }}",
+                "rightValue": "document",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          }
+        }
+      },
+      {
+        "id": "node-baixar-url-midia",
+        "name": "Baixar URL Mídia",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          900,
+          680
+        ],
+        "parameters": {
+          "method": "GET",
+          "url": "=https://graph.facebook.com/v21.0/{{ $json.mediaId }}",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "whatsAppApi",
+          "options": {}
+        },
+        "credentials": {
+          "whatsAppApi": {
+            "id": "umUchtUGj2ZzikQ5",
+            "name": "WhatsApp account"
+          }
+        }
+      },
+      {
+        "id": "node-baixar-pdf-binary",
+        "name": "Baixar PDF Binary",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1120,
+          680
+        ],
+        "parameters": {
+          "method": "GET",
+          "url": "={{ $json.url }}",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "whatsAppApi",
+          "options": {
+            "response": {
+              "response": {
+                "responseFormat": "file"
+              }
+            }
+          }
+        },
+        "credentials": {
+          "whatsAppApi": {
+            "id": "umUchtUGj2ZzikQ5",
+            "name": "WhatsApp account"
+          }
+        }
+      },
+      {
+        "id": "node-preparar-gpt4o",
+        "name": "Preparar Request GPT-4o",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1340,
+          680
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.openai.com/v1/files",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "openAiApi",
+          "sendBody": true,
+          "contentType": "multipart-form-data",
+          "bodyParameters": {
+            "parameters": [
+              {
+                "name": "purpose",
+                "value": "user_data"
+              },
+              {
+                "name": "file",
+                "parameterType": "formBinaryData",
+                "inputDataFieldName": "data"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "credentials": {
+          "openAiApi": {
+            "id": "LFnyHUsH7lj5FEvQ",
+            "name": "scala-agent"
+          }
+        }
+      },
+      {
+        "id": "node-extrair-pdf",
+        "name": "Extrair Conteúdo PDF",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1560,
+          680
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.openai.com/v1/chat/completions",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "openAiApi",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ model: \"gpt-4o\", max_tokens: 4000, messages: [{ role: \"user\", content: [{ type: \"file\", file: { file_id: $json.id } }, { type: \"text\", text: \"Extraia e organize TODO o conteúdo deste PDF de forma completa. Preserve todas as informações, dados, estratégias, objetivos e instruções. Responda em português.\" }] }] }) }}",
+          "options": {}
+        },
+        "credentials": {
+          "openAiApi": {
+            "id": "LFnyHUsH7lj5FEvQ",
+            "name": "scala-agent"
+          }
+        }
+      },
+      {
+        "id": "node-formatar-pdf",
+        "name": "Formatar Mensagem PDF",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1560,
+          520
+        ],
+        "parameters": {
+          "jsCode": "return (() => {\n  const extracted = $input.first().json.choices?.[0]?.message?.content || 'Não foi possível extrair o conteúdo do PDF.';\n  const original = $('Extrair Dados').first().json;\n  return [{\n    json: {\n      phoneNumber: original.phoneNumber,\n      messageText: '[PDF: ' + (original.mediaFilename || 'documento.pdf') + ']\\n\\n' + extracted,\n      pushName: original.pushName,\n      conversationId: original.conversationId,\n      timestamp: original.timestamp,\n      messageType: 'text'\n    }\n  }];\n})();"
+        }
+      },
+      {
+        "id": "node-buscar-historico-paulo",
+        "name": "Buscar Histórico Paulo",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4,
+        "position": [
+          768,
+          160
+        ],
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "UeSaLFF10d9utrmA",
+            "name": "Google Sheets - Paulo"
+          }
+        },
+        "alwaysOutputData": true,
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1yDex-TLsx3TCxQ2ZZObTn6X_4Ln83ClMEiZI47y6h5U",
+            "mode": "id"
+          },
+          "sheetName": {
+            "mode": "name",
+            "value": "Conversas"
+          },
+          "options": {}
+        }
       }
     ],
     "connections": {
@@ -2585,7 +3047,7 @@
         "main": [
           [
             {
-              "node": "É Paulo?",
+              "node": "IF É Documento?",
               "type": "main",
               "index": 0
             }
@@ -2925,6 +3387,90 @@
             }
           ]
         ]
+      },
+      "IF É Documento?": {
+        "main": [
+          [
+            {
+              "node": "Baixar URL Mídia",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "É Paulo?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Baixar URL Mídia": {
+        "main": [
+          [
+            {
+              "node": "Baixar PDF Binary",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Baixar PDF Binary": {
+        "main": [
+          [
+            {
+              "node": "Preparar Request GPT-4o",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Preparar Request GPT-4o": {
+        "main": [
+          [
+            {
+              "node": "Extrair Conteúdo PDF",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Extrair Conteúdo PDF": {
+        "main": [
+          [
+            {
+              "node": "Formatar Mensagem PDF",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Formatar Mensagem PDF": {
+        "main": [
+          [
+            {
+              "node": "É Paulo?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Buscar Histórico Paulo": {
+        "main": [
+          [
+            {
+              "node": "Buscar Disponibilidade",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
       }
     },
     "authors": "Paulo Nunan",
@@ -2933,18 +3479,18 @@
     "autosaved": false,
     "workflowPublishHistory": [
       {
-        "createdAt": "2026-03-19T05:08:45.354Z",
-        "id": 123,
+        "createdAt": "2026-03-20T02:13:10.686Z",
+        "id": 177,
         "workflowId": "EVbZX91iB5moD6I4",
-        "versionId": "0b4017cd-74ad-4d64-9b7d-eb21fd66cb9d",
+        "versionId": "93de42fe-f00a-4201-ab42-b295bdf8a264",
         "event": "activated",
         "userId": "cdef1802-d0c6-490f-add8-cd6f5c4b604d"
       },
       {
-        "createdAt": "2026-03-19T05:08:43.912Z",
-        "id": 122,
+        "createdAt": "2026-03-20T02:13:09.202Z",
+        "id": 176,
         "workflowId": "EVbZX91iB5moD6I4",
-        "versionId": "0b4017cd-74ad-4d64-9b7d-eb21fd66cb9d",
+        "versionId": "93de42fe-f00a-4201-ab42-b295bdf8a264",
         "event": "deactivated",
         "userId": "cdef1802-d0c6-490f-add8-cd6f5c4b604d"
       }
