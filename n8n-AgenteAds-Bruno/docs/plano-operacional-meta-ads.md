@@ -140,7 +140,7 @@ Fechamento
 - **Meta:** O algoritmo aprende quem visita o site e quem tem perfil de cliente
 
 ### Fase 2 — Ativar Conversões
-- **Gatilho:** 500+ eventos `wa_button_click` no pixel
+- **Gatilho:** 500+ eventos totais no pixel (PageView + wa_button_click combinados)
 - **Mudança:** Trocar `LANDING_PAGE_VIEWS` → `OFFSITE_CONVERSIONS`
 - **Orçamento mínimo recomendado:** R$30-50/dia (precisa de 50 conversões/semana para sair do learning)
 - **Ação:** Criar novo ad set (attribution window muda — não é possível editar o existente)
@@ -206,6 +206,28 @@ Analisar performance card a card no Gerenciador:
 | CPV alto com CTR ok | Landing page lenta ou desalinhada com o anúncio | Testar velocidade do site, revisar alinhamento de mensagem |
 | Frequência > 3 em 2 semanas | Público muito pequeno | Expandir targeting ou criar novo ad set com público diferente |
 | CTR bom, zero conversões no site | Desalinhamento anúncio × site | Revisar se a promessa do anúncio é cumprida no site |
+
+---
+
+## Recomendações do Meta — como tratar
+
+| Recomendação | Decisão | Motivo |
+|---|---|---|
+| Criativo Advantage+ (retoques automáticos, +3%) | ❌ Não aplicar | Perde controle da identidade visual. Meta modifica cores, textos e sobreposições. Ganho de 3% não compensa risco de distorção de marca. |
+| Reels 9:16 com áudio (+8% de CPR) | ✅ Planejar para Fase 2 | Reels tem menor custo por resultado. Criar vídeo vertical da Scala (15-30s) e adicionar à campanha no próximo ciclo criativo. |
+
+---
+
+## Observações Técnicas
+
+- **ID canônico da conta:** `act_1605651367382391` — usar este para criar criativos e ads. O `act_120244137424200671` é alias.
+- **API version:** usar `v22.0` — `v19.0` foi descontinuada em fev/2026
+- **Hashes de imagem** são vinculados à conta onde foram uploadados. Re-upload necessário ao trocar de conta.
+- **`promoted_object` é imutável** após criação do ad set
+- **Janela de atribuição é imutável** após criação do ad set — qualquer mudança exige novo ad set
+- **Imagem estática:** 1024x1536 (2:3) — Meta faz crop automático. Substituir por 1:1 ou 4:5 no próximo ciclo.
+- **Page Access Token:** obtido via `GET /{page_id}?fields=access_token` com o system user token
+- **Permissão `pages_manage_metadata`** não está no token atual — foto de perfil da página precisa ser trocada manualmente no Facebook
 
 ---
 
