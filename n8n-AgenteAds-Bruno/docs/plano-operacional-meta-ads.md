@@ -49,6 +49,8 @@ Fechamento
 | Otimização | `LANDING_PAGE_VIEWS` |
 | Bid Strategy | `LOWEST_COST_WITHOUT_CAP` |
 | Público | Advantage+ Audience — Brasil, 25+ |
+| Status | **ACTIVE** — no ar desde 2026-03-21 |
+| Pagamento | PayPal `nunan38@gmail.com` |
 
 ### Anúncios Ativos
 
@@ -57,6 +59,22 @@ Fechamento
 | Estático — Vendas no escuro | `120244272148560671` | `955974620281208` | Imagem única |
 | Carrossel 1 — Funil quebrado | `120244272149010671` | `897804036413244` | Carrossel 5 cards |
 | Carrossel 2 — Concorrente automatizou | `120244272149350671` | `2239822923454857` | Carrossel 5 cards |
+
+### Image Hashes (conta `act_1605651367382391`)
+
+| Arquivo | Hash |
+|---|---|
+| Estático `1.png` | `807918c0f6f5ce47adaf0e4ce830f37c` |
+| Carrossel 1 — card 1 | `abebb1815222b5069fb51fddac067df7` |
+| Carrossel 1 — card 2 | `3b7825048a1819ace6b1d4f1bb27fb5d` |
+| Carrossel 1 — card 3 | `4a667e81e6d043ffb8fe6f036ac94d2e` |
+| Carrossel 1 — card 4 (4.1.png) | `307895f152ec89821248abc76cdb066e` |
+| Carrossel 1 — card 5 (ChatGPT) | `9d9a7c63c4ad1f7c6c7b9d113c99e43f` |
+| Carrossel 2 — card 1 | `48782db817148befc51e14a742177c22` |
+| Carrossel 2 — card 2 | `4c6925d9006720e24fa6384ee0f82337` |
+| Carrossel 2 — card 3 | `811cbfcac814a42c8d6b9faf70af0b35` |
+| Carrossel 2 — card 4 | `332d77f339372f4f0b995d37320ac86a` |
+| Carrossel 2 — card 5 | `1fb433c441af6e07b1fdc872d7609106` |
 
 ---
 
