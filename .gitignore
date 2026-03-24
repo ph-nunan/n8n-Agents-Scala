@@ -1,0 +1,13 @@
+# OAuth tokens — NUNCA commitar credenciais
+setup_token.json
+ga4_token.json
+*.token.json
+
+# Resultados temporários
+lighthouse-result.json
+*.tmp
+
+# Python
+__pycache__/
+*.pyc
+.env
