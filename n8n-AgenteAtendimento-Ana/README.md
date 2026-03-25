@@ -1,6 +1,6 @@
-# Agente IA Scala — WhatsApp 24/7
+# Agente IA Scala — Ana (WhatsApp 24/7) v2
 
-Agente de atendimento IA para qualificação de leads e agendamento de diagnósticos gratuitos via WhatsApp, com integração real ao Google Agenda e Google Meet.
+Agente de atendimento IA para qualificação de leads e agendamento de diagnósticos gratuitos via WhatsApp, com integração ao Google Calendar e Google Meet automático.
 
 ## Stack
 
@@ -8,30 +8,28 @@ Agente de atendimento IA para qualificação de leads e agendamento de diagnóst
 |---|---|
 | Orquestração | n8n (`n8n.paulonunan.com`) |
 | Canal | WhatsApp Business Cloud API (Meta oficial) |
-| Modelo de IA | GPT-4o-mini (OpenAI) |
-| Memória | Google Sheets |
-| Agenda | Google Calendar API (freeBusy + Events) |
-| Reunião | Google Meet (link automático) |
+| Modelo de IA | GPT-4.1 (OpenAI) |
+| Memória | Google Sheets (HTTP Request → Sheets API v4) |
+| Agenda | Google Calendar API (criar evento + Meet link) |
+| Reunião | Google Meet (link automático no evento) |
 | Persona | Ana — consultora de automação da Scala |
 
 ## Workflow n8n
 
-- **ID:** `EVbZX91iB5moD6I4`
-- **Nome:** Scala — WhatsApp AI Agent (Ana) 24/7
-- **Status:** ✅ ATIVO em produção (ativado 2026-03-16, atualizado 2026-03-19)
-- **Nodes:** 32
+- **ID:** `S22OxWxT77a1geK8`
+- **Nome:** Ana — Agente WhatsApp v2
+- **Status:** ✅ ATIVO em produção
+- **Nodes:** 16
+- **Webhook URL:** `https://n8n.paulonunan.com/webhook/whatsapp-ana`
 
-## IDs Meta (atualizado 2026-03-16)
+## IDs Meta
 
 | Campo | Valor |
 |---|---|
 | Meta App ID | `854431830954678` |
 | Phone Number (+55 61 8189-4189) | `971782562694033` |
 | WhatsApp Business Account ID | `1480192843700940` |
-| Webhook Verify Token | `scala-webhook-2026` |
-| Webhook URL (produção) | `https://n8n.paulonunan.com/webhook/a4d4b2c4-2099-4eb6-980d-df5274d1c1fc/webhook` |
 | PIN do número | `869531` |
-| System User Token | permanente (sem expiração) — gerado 2026-03-16 |
 | Link WhatsApp | `https://wa.me/556181894189` |
 
 ## Google Sheets
@@ -39,83 +37,100 @@ Agente de atendimento IA para qualificação de leads e agendamento de diagnóst
 - **Sheet ID:** `1yDex-TLsx3TCxQ2ZZObTn6X_4Ln83ClMEiZI47y6h5U`
 - **Aba:** `Conversas`
 - **Colunas:** `conversationId | role | content | pushName | timestamp`
+- **Acesso:** HTTP Request → Google Sheets API v4 (contorna bug do node nativo v4.x)
 
 ## Google Calendar
 
 - **Credencial n8n:** `Google Calendar - Paulo` (ID: `QGp1FxkKTfYhYYJ0`)
 - **Calendário:** `primary` (ph.nunan@gmail.com)
-- **Duração de cada reunião:** 30 minutos
-- **Proteção contra sobreposição:** freeBusy API bloqueia automaticamente
+- **Duração:** 20 min por reunião
+- **Meet link:** gerado automaticamente via `conferenceData.createRequest`
 
-## Fluxo do Agente
+## Arquitetura do Workflow (16 nodes)
 
 ```
-WhatsApp Trigger → Extrair Dados → É Paulo? (IF)
-   ├── Paulo (dono): Buscar Sessao → [menu / Bruno / Ana]
-   └── Lead: Buscar Histórico (Sheets)
-         ↓
-   Buscar Disponibilidade (Google Calendar freeBusy)
-         ↓
-   Formatar Slots (horários livres até 22h, sem domingos)
-         ↓
-   Buscar Reuniões (Google Calendar events do mês — para modo dono)
-         ↓
-   Montar Contexto (detecta Paulo vs lead; injeta reuniões se perguntado)
-         ↓
-   OpenAI GPT-4o-mini → Delay 5s → Preparar Resposta
-         ↓
-   Salvar no Sheets → Enviar WhatsApp
-   ├── Detectar Agendamento (IF)?
-   │   ├── SIM: Extrair Info → Criar Evento (Meet) → Enviar Link Meet
-   │   └── NÃO: fim
-   └── CRM: Extrair Perfil → Formatar → Salvar Lead (paralelo)
+Webhook WhatsApp (POST /whatsapp-ana, responseMode: onReceived)
+  → Extrair Dados (Code)
+  → Buscar Histórico (HTTP Request → Sheets API GET)
+  → Limitar 1 Item (Code — força 1 item de saída)
+  → Montar Contexto (Code — system prompt 8 passos + slots dinâmicos)
+  → GPT-4.1 (HTTP Request → OpenAI)  [error → Resposta Fallback]
+  → Preparar Resposta (Code)
+  → Detectar Agendamento (Code — detecta "marcado para DD/MM às HH:MM")
+  → IF Agendamento
+      [true]  → Criar Evento Calendario (HTTP Request → Calendar API)
+               → Montar Mensagem Final (Code — append Meet link)
+               → Aguardar (Wait 3s)
+               → Enviar WhatsApp
+      [false] → Aguardar (Wait 3s)
+               → Enviar WhatsApp
+  → Preparar Linhas (Code — lê de Preparar Resposta, não do input)
+  → Salvar Conversa (HTTP Request → Sheets API POST :append)
+
+  Resposta Fallback → Aguardar → Enviar WhatsApp
 ```
 
-### Modo Dono (Paulo)
+## Fluxo de Atendimento da Ana (8 Passos)
 
-Quando Paulo (`556181292879`) mensageia, a Ana age como **assistente executiva** (não vendedora):
-- Detecta se a mensagem é sobre reuniões/agenda via regex
-- Se sim: injeta `<dados_reunioes>` com contagem do mês, realizadas e próximas
-- Se não: responde diretamente sem dados de calendário
+| Passo | Objetivo |
+|---|---|
+| P1 — Conexão Inicial | Boas-vindas com nome + descobrir negócio (Variante A: site / Variante B: orgânico) |
+| P2 — Identificação da Trilha | Mapear área: Atendimento / Marketing / Comercial / Outra |
+| P3 — Reconhecimento da Dor | Mostrar exemplos específicos da trilha com bullets |
+| P4 — Aprofundamento | 2 perguntas específicas por trilha, uma por vez |
+| P5 — Transição e Resumo | Resumo personalizado da dor + criar antecipação para a reunião |
+| P6 — Agendamento | Oferta de 2 slots concretos das disponibilidades |
+| P7 — Confirmação | "Perfeito! ✅ Marcado para DD/MM às HH:MM." + micro-compromisso |
+| P8 — Lembrete D-1 | *Pendente — workflow separado com cron* |
+
+## Desvios Cobertos
+
+- Preço → redireciona para valor do diagnóstico
+- Resposta vaga → foca em uma dor
+- Não é decisor → convida ambos
+- Já tem solução → auditoria do ecossistema
+- Silêncio → reengajamento
+
+## Bugs Corrigidos (v2 — 2026-03-25)
+
+| Bug | Causa | Fix |
+|---|---|---|
+| Google Sheets node `sheetName` error | Node v4.x nunca resolve via API (qualquer modo) | Substituído por HTTP Request → Sheets API v4 |
+| Ana repetia "Oi [Nome]" em toda mensagem | `Preparar Linhas` lia `$input` (resposta WhatsApp) → salvava `undefined` como conversationId | Corrigido para ler `$('Preparar Resposta').first().json` |
+| Meet link duplicado na oferta de slots | `Detectar Agendamento` usava `/✅/` que batia nos slots do fechamento | Regex restrito a `marcado para\|agendado para` |
+| Meet link substituía data na confirmação | `Montar Mensagem Final` substituía `✅ Marcado para...` pelo bloco de meet | Corrigido: simplesmente appenda `\n🔗 [link]` ao final |
 
 ## Estrutura da Pasta
 
 ```
 n8n-AgenteAtendimento-Ana/
-├── README.md                              # Este arquivo
+├── README.md
 ├── docs/
-│   ├── guia-configuracao.md               # Setup completo passo a passo
-│   ├── system-prompt.md                   # System prompt editável da Ana
-│   ├── analise-sessao-2026-03-16.md       # Implementação inicial — 14 erros e soluções
-│   └── analise-sessao-2026-03-19.md       # Modo dono + fix relatório de reuniões
+│   ├── system-prompt.md              # System prompt completo editável (v2)
+│   ├── guia-configuracao.md          # Setup completo passo a passo
+│   ├── analise-sessao-2026-03-25.md  # Rebuild v2 — 8 passos + Calendar + fixes
+│   ├── analise-sessao-2026-03-20-parte2.md
+│   ├── analise-sessao-2026-03-20.md
+│   ├── analise-sessao-2026-03-19.md
+│   └── analise-sessao-2026-03-16.md
 └── workflows/
-    └── scala-whatsapp-ai-agent.json       # JSON completo do workflow n8n (sincronizado)
+    └── scala-whatsapp-ai-agent.json  # JSON do workflow n8n (sincronizado)
 ```
-
-## Documentação
-
-- Setup completo: [`docs/guia-configuracao.md`](docs/guia-configuracao.md)
-- System prompt editável: [`docs/system-prompt.md`](docs/system-prompt.md)
-- Implementação inicial (2026-03-16): [`docs/analise-sessao-2026-03-16.md`](docs/analise-sessao-2026-03-16.md)
-- **Modo dono + fix reuniões (2026-03-19):** [`docs/analise-sessao-2026-03-19.md`](docs/analise-sessao-2026-03-19.md)
 
 ## Credenciais no n8n
 
 | Credencial | Tipo | Usada em |
 |---|---|---|
-| WhatsApp OAuth account | WhatsApp Trigger API | Trigger (receber mensagens) |
-| WhatsApp account | WhatsApp API | Enviar respostas e link Meet |
-| scala-agent | OpenAI API | GPT-4o-mini |
-| Google Sheets - Paulo | Google Sheets OAuth2 | Histórico de conversas |
-| Google Calendar - Paulo | Google Calendar OAuth2 | Disponibilidade + criar eventos |
+| `WhatsApp account` (id: `umUchtUGj2ZzikQ5`) | WhatsApp API | Enviar mensagens |
+| `scala-agent` (id: `LFnyHUsH7lj5FEvQ`) | OpenAI API | GPT-4.1 |
+| `Google Sheets - Paulo` (id: `UeSaLFF10d9utrmA`) | Google Sheets OAuth2 | Histórico de conversas |
+| `Google Calendar - Paulo` (id: `QGp1FxkKTfYhYYJ0`) | Google Calendar OAuth2 | Criar eventos + Meet |
 
-## Observações Técnicas Importantes
+## Observações Técnicas
 
-- **`require('luxon')` é bloqueado** nesta versão do n8n (task runner separado). Todos os Code nodes usam `Date` nativo.
-- **`alwaysOutputData`** deve ser propriedade do node, NÃO de `parameters.options`.
-- **Phone Number ID** vai no parâmetro do node WhatsApp, não na credencial.
-- A lógica de disponibilidade injeta os **períodos ocupados** (não os livres) para Ana não entrar em loop.
-- **Code node com múltiplos inputs:** n8n executa o código uma vez por branch — nunca faz merge. Sempre linearizar para 1 input quando precisar de dados de múltiplos nodes.
-- **`const` no escopo raiz do Code node:** o task runner reutiliza o contexto de VM. Sempre usar IIFE: `return (() => { ... })();`
-- **`e.start.dateTime` do Google Calendar é string:** `new Date(dateString)` parseia corretamente (já tem timezone). NÃO subtrair números de strings de data (`string - number = NaN`).
-- **`updateNode` no `n8n_update_partial_workflow`:** usa `{ nodeName, updates: { "parameters.jsCode": "..." } }` com dot notation. Não usar `changes`.
+- **Google Sheets node v4.x** tem bug: `sheetName` nunca resolve via API. Usar HTTP Request → Sheets API v4 direto.
+- **`Preparar Linhas`** deve sempre ler de `$('Preparar Resposta').first().json`, não de `$input` (que retorna a resposta da API WhatsApp).
+- **`Detectar Agendamento`** usa regex restrito (`marcado para|agendado para`) — nunca `/✅/` que também aparece no fechamento.
+- **`Montar Mensagem Final`** só executa quando `isBooking === true`. Apenas faz append do Meet link ao final da mensagem.
+- **Webhook `responseMode: onReceived`**: responde 200 imediatamente ao Meta, continua processando em background — evita timeout de 20s do WhatsApp.
+- **Legacy prefix**: histórico antigo tem `conversationId = 'scala_' + phoneNumber`. O filtro aceita ambos.
