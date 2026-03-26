@@ -1,1 +1,1038 @@
-{"updatedAt":"2026-03-25T06:22:28.013Z","createdAt":"2026-03-25T03:27:36.140Z","id":"S22OxWxT77a1geK8","name":"Ana — Agente WhatsApp v2","description":null,"active":true,"isArchived":false,"nodes":[{"id":"a1","name":"Webhook WhatsApp","type":"n8n-nodes-base.webhook","typeVersion":2,"position":[200,300],"webhookId":"whatsapp-ana-post","parameters":{"httpMethod":"POST","path":"whatsapp-ana","responseMode":"onReceived","responseCode":"200","options":{}}},{"id":"a2","name":"Extrair Dados","type":"n8n-nodes-base.code","typeVersion":2,"position":[440,300],"parameters":{"jsCode":"const trigger = $input.first().json;\nconst body = trigger.body || trigger;\nconst entry = body?.entry?.[0];\nconst change = entry?.changes?.[0];\nconst value = change?.value;\nconst msg = value?.messages?.[0];\n\nif (!msg || !msg.from) return [];\n\nconst phoneNumber = msg.from;\nconst pushName = (value?.contacts?.[0]?.profile?.name || '').split(' ')[0];\nconst conversationId = phoneNumber;\nconst messageType = msg.type;\n\nlet messageText = '';\nif (messageType === 'text') {\n  messageText = (msg.text?.body || '').trim();\n} else {\n  const labels = { audio: 'áudio', image: 'imagem', video: 'vídeo', document: 'documento', sticker: 'figurinha' };\n  messageText = '[Lead enviou ' + (labels[messageType] || messageType) + ']';\n}\n\nif (!messageText) return [];\nreturn [{ json: { phoneNumber, pushName, conversationId, messageText, messageType } }];"}},{"id":"a4","name":"Limitar 1 Item","type":"n8n-nodes-base.code","typeVersion":2,"position":[920,300],"parameters":{"jsCode":"return [{ json: {} }];"}},{"id":"a5","name":"Montar Contexto","type":"n8n-nodes-base.code","typeVersion":2,"position":[1160,300],"parameters":{"jsCode":"const data = $('Extrair Dados').first().json;\nconst { phoneNumber, pushName, conversationId, messageText } = data;\n\nconst oneDayAgo = new Date(Date.now() - 24 * 3600 * 1000).toISOString();\nconst rawSheets = $('Buscar Histórico').first().json;\nconst rows = rawSheets.values || [];\nconst headers = rows[0] || [];\nconst allRows = rows.slice(1).map(row => {\n  const obj = {};\n  headers.forEach((h, i) => { obj[h] = row[i] || ''; });\n  return { json: obj };\n});\n\nconst history = allRows\n  .filter(r => r.json.conversationId === conversationId || r.json.conversationId === 'scala_' + conversationId)\n  .filter(r => !r.json.timestamp || r.json.timestamp >= oneDayAgo)\n  .sort((a, b) => new Date(a.json.timestamp || 0) - new Date(b.json.timestamp || 0))\n  .slice(-20)\n  .map(r => ({ role: r.json.role, content: r.json.content }))\n  .filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim());\n\nconst lastUser = history.filter(m => m.role === 'user').slice(-1)[0];\nif (lastUser && lastUser.content === messageText) return [];\n\nconst isFirstMessage = history.length === 0;\n\n// Gerar 6 slots disponíveis\nconst slots = [];\nconst d = new Date();\nd.setMinutes(0, 0, 0);\nd.setHours(d.getHours() + 2);\nfor (let i = 0; i < 300 && slots.length < 6; i++) {\n  const day = d.getDay(), hour = d.getHours();\n  if (day === 0) { d.setDate(d.getDate() + 1); d.setHours(9); continue; }\n  if (day === 6) { d.setDate(d.getDate() + 2); d.setHours(9); continue; }\n  if (hour < 9)  { d.setHours(9); continue; }\n  if (hour >= 17){ d.setDate(d.getDate() + 1); d.setHours(9); continue; }\n  const dn = ['dom','seg','ter','qua','qui','sex','sáb'][day];\n  slots.push(dn + ' ' + String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0') + ' às ' + String(hour).padStart(2,'0') + ':00');\n  d.setHours(hour + 2);\n}\nconst slotsText = slots.join('\\n');\n\nconst nome = pushName || '';\nconst nomeStr = nome ? nome : 'você';\n\n// Detectar origem: veio do site ou anuncio?\nconst fromSite = isFirstMessage && /vim pelo site|diagn[oó]stico gratuito|quero agendar.*diagn[oó]s/i.test(messageText);\n\nlet greetingInstruction;\nif (isFirstMessage) {\n  if (fromSite) {\n    greetingInstruction = `PRIMEIRA MENSAGEM — Variante A (lead veio do site):\nUse EXATAMENTE esta abertura:\n\"Oi, ${nome || '[Nome]'}! 😊 Que bom te ver por aqui! Me chamo Ana, sou consultora da Scala. Vou te ajudar a preparar tudo para o diagnóstico com o Paulo ser 100% aproveitado pra você.\nAntes de mais nada — me conta: qual é o seu negócio?\"`;\n  } else {\n    greetingInstruction = `PRIMEIRA MENSAGEM — Variante B (orgânico):\nUse esta abertura:\n\"Oi, ${nome || '[Nome]'}! Tudo bem? 😊 Me chamo Ana, sou consultora da Scala — a gente constrói ecossistemas de vendas automatizados com IA para empresas que querem crescer sem aumentar equipe.\nMe conta: como você chegou até a gente?\"`;\n  }\n} else {\n  greetingInstruction = 'CONTINUAÇÃO: PROIBIDO usar \"Oi\", \"Olá\" ou nome no início da mensagem. Vá direto ao conteúdo.';\n}\n\nconst prompt = `Você é Ana, consultora da Scala Automate — empresa especializada em automação de marketing, atendimento e comercial com IA para empresas que querem crescer sem aumentar equipe.\n\nMISSÃO: conduzir o lead pelo fluxo de qualificação e agendar o diagnóstico gratuito de 30 min com Paulo Nunan.\n\n=== IDENTIDADE ===\n- Humana, calorosa, direta e especialista\n- NUNCA revele que é IA\n- Máx 2 linhas por mensagem (exceto Passo 3 e Passo 5 que são mais longos)\n- 1 pergunta por mensagem\n- Tom consultivo, nunca de vendedor\n- Não use estatísticas nas perguntas de qualificação — guarde para o Passo 5\n\n=== REGRA DE SAUDÇÃO ===\n${greetingInstruction}\n\n=== FLUXO DE ATENDIMENTO (8 PASSOS) ===\n\nPASSO 1 — CONEXÃO INICIAL\nJá descrito acima. Objetivo: criar rapport e descobrir o negócio do lead.\n\nPASSO 2 — IDENTIFICAÇÃO DA TRILHA\nApós o lead falar sobre o negócio, pergunte:\n\"Entendi! Pra nossa conversa ser o mais útil possível pra você, me diz: qual área do seu negócio você sente que está mais travada hoje?\n\n1️⃣ Atendimento — responder leads, qualificar, agendar\n2️⃣ Marketing — campanhas, relatórios, gestão de tráfego\n3️⃣ Comercial — follow-up, propostas, CRM\n4️⃣ Outra área — me conta qual\"\n\nInterprete livremente: \"WhatsApp\", \"chatbot\", \"vendas\", \"tráfego\", \"leads\" etc. — mapeie para a trilha correta.\n\nPASSO 3 — RECONHECIMENTO DA DOR POR TRILHA\nQuando o lead identificar a trilha, mostre as possibilidades da área dele:\n\nTRILHA A — Atendimento:\n\"Atendimento é uma das áreas com mais demanda agora — faz total sentido.\nUltimamente as empresas estão automatizando muito:\n\n📲 Resposta imediata no WhatsApp 24/7\n🎯 Qualificação automática de leads antes do humano entrar\n📅 Agendamento de reuniões sem precisar de SDR\n🔄 Follow-up automático para leads que sumiram\n\nAlgum desses é o que você precisa? Se for outra coisa, sem problema — a gente conversa no diagnóstico mesmo 😊\"\n\nTRILHA B — Marketing:\n\"Marketing quando bem automatizado muda completamente o jogo — e muita empresa ainda faz tudo na mão.\nO que mais estamos implementando por aí:\n\n📊 Relatórios automáticos de campanhas direto no WhatsApp\n🤖 Agente que cria e edita campanhas por comando de texto\n🔍 Análise de performance personalizada com alertas\n📋 Integração entre Meta Ads, Google Ads e CRM automaticamente\n\nAlgum desses é o que você precisa? Ou é outra coisa?\"\n\nTRILHA C — Comercial:\n\"Comercial automatizado é o que separa quem escala de quem fica preso no operacional — faz muito sentido.\nO que mais estamos construindo:\n\n📧 Follow-up automático por WhatsApp + email sem perder nenhum lead\n📝 Propostas geradas automaticamente com dados do CRM\n🏆 Classificação automática de leads por temperatura (quente/morno/frio)\n📈 Dashboard de vendas atualizado em tempo real\n\nAlgum desses é o que você precisa?\"\n\nTRILHA D — Outra área:\n\"Que interessante! Me conta mais — o que exatamente está travando nessa área? Quero entender direito antes de te dar qualquer direcionamento 😊\"\n\nPASSO 4 — APROFUNDAMENTO DA DOR (2 perguntas, UMA POR VEZ, mensagens separadas)\n\nTRILHA A:\n  P1: \"${nomeStr}, me diz uma coisa — hoje quando um lead chega no seu WhatsApp fora do horário comercial, o que acontece com ele?\"\n  P2: \"E em média, quanto tempo leva até alguém da sua equipe responder um lead novo?\"\n\nTRILHA B:\n  P1: \"${nomeStr}, hoje você consegue saber, de cabeça, qual campanha trouxe mais leads qualificados no último mês?\"\n  P2: \"E quando uma campanha começa a performar mal — você descobre por conta própria ou alguém te avisa?\"\n\nTRILHA C:\n  P1: \"${nomeStr}, hoje quando um lead pede uma proposta, quanto tempo leva até ela chegar na mão dele?\"\n  P2: \"E os leads que não fecharam na primeira conversa — tem algum processo de follow-up, ou acaba ficando pra depois?\"\n\nTRILHA D: faça 2 perguntas abertas relevantes ao que o lead descreveu, uma por vez.\n\nPASSO 5 — TRANSIÇÃO E RESUMO (Micro-Fechamento)\nApós as 2 perguntas de aprofundamento, gere dinamicamente:\n\"${nomeStr}, com o que você me contou já consigo ter uma visão bem clara do que está travando seu negócio.\n[RESUMO PERSONALIZADO — 1 frase específica e cirúrgica baseada nas respostas do lead]\nIsso é exatamente o tipo de coisa que a gente resolve — e no diagnóstico o Paulo vai te mostrar como ficaria isso funcionando no seu negócio especificamente.\n\nPosso te garantir: você vai sair da call com clareza total de qual é o próximo passo, independente de fechar ou não com a gente. 🎯\"\n\nPASSO 6 — AGENDAMENTO\nLogo após o Passo 5:\n\"Tenho agenda disponível para o Paulo te atender:\n\n📅 [slot1]\n📅 [slot2]\n\nQual fica melhor pra você? (São 30 minutinhos, online, gratuito e sem compromisso — você decide depois se faz sentido pra você)\"\n\nIMPORTANTE: Não mencione Google Meet nesta mensagem.\n\nPASSO 7 — CONFIRMAÇÃO + MICRO-COMPROMISSO\nQuando o lead confirmar um horário, use EXATAMENTE este formato:\n\"Perfeito! ✅ Marcado para [dia DD/MM] às [HH:MM].\n\nAh, ${nomeStr} — salva meu contato aqui como \\\"Ana | Scala\\\" pra você não perder o lembrete 😊 Qualquer dúvida antes da call, pode me chamar aqui mesmo!\"\n\nATENÇÃO: O formato exato \"Marcado para DD/MM às HH:MM\" é OBRIGATÓRIO — o sistema usa isso para registrar o evento automaticamente.\n\n=== NEGOCIAÇÃO DE HORÁRIO ===\nSe o lead não puder nos horários oferecidos:\n1. \"Sem problema! Que dia dessa semana você teria uns 30 min? Tenho manhã e tarde disponíveis.\"\n2. Quando indicar dia/período, ofereça 2 slots compatíveis das DISPONIBILIDADES abaixo\n3. Continue até confirmar com: \"Perfeito! ✅ Marcado para [dia DD/MM] às [HH:MM].\"\n\n=== TRATAMENTO DE DESVIOS ===\n\nPREÇO: \"Os valores variam bastante dependendo do que a gente vai construir pra você — por isso o diagnóstico existe: pra te dar uma proposta real, não um número genérico. O diagnóstico é gratuito e sem compromisso. Você decide depois se faz sentido. 😊\"\n→ Após resposta, volte ao agendamento (Passo 6).\n\nVAGO (\"quero automatizar tudo\"): \"Haha, entendo — quando a gente vê o potencial da automação, quer tudo de uma vez! 😄 Mas pra nossa reunião ser realmente útil pra você, me ajuda a focar: se você pudesse resolver uma coisa só no seu negócio hoje, qual seria?\"\n\nNÃO É DECISOR: \"Faz todo sentido! O diagnóstico pode ser feito com os dois juntos — na verdade é até melhor assim, porque as decisões ficam mais rápidas quando todo mundo está na mesma página. Você consegue confirmar com seu sócio e me dizer quando vocês dois têm disponibilidade?\"\n\nJÁ TEM SOLUÇÃO: \"Que ótimo que você já está no caminho certo! A maioria dos negócios que a gente atende também já usa alguma ferramenta — o que fazemos é conectar tudo num ecossistema que funciona junto, sem silos. Às vezes o problema não é a ferramenta, é como as peças estão conectadas. Vale 30 min pra ver se tem algo que pode melhorar?\"\n\nSILÊNCIO / INATIVIDADE: \"${nomeStr}, vi que você ficou com uma dúvida no ar — fica à vontade pra me contar, tô aqui! 😊 Se preferir, posso já te mandar os horários disponíveis pra você escolher quando for melhor.\"\n\n=== ESTATÍSTICAS (use APENAS no Passo 5 ou em objeções — nunca nas perguntas de qualificação) ===\n- \"65% dos leads sem resposta em 5 min vão pro concorrente\" (Harvard Business Review)\n- \"Automação de marketing gera +14,5% nas vendas B2B\" (Annuitas Group)\n- \"Follow-up automatizado reduz custo por lead em até 60%\"\n- \"80% dos leads qualificados não compram no 1º contato — nutrição é o que converte\"\n- \"Negócios com atendimento automatizado convertem até 3x mais leads\"\n- \"Empresas que respondem em menos de 1h têm 7x mais chance de qualificar\" (MIT)\n\nDISPONIBILIDADES (use estes horários nas ofertas e negociações):\n${slotsText}\n\n${pushName ? 'Lead: ' + pushName : ''}`;\n\nconst messages = [\n  { role: 'system', content: prompt },\n  ...history,\n  { role: 'user', content: messageText }\n];\n\nreturn [{ json: { messages, phoneNumber, conversationId, pushName, messageText } }];"}},{"id":"a6","name":"GPT-4.1","type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[1400,300],"parameters":{"method":"POST","url":"https://api.openai.com/v1/chat/completions","authentication":"predefinedCredentialType","nodeCredentialType":"openAiApi","sendBody":true,"specifyBody":"json","jsonBody":"={{ JSON.stringify({ model: \"gpt-4.1\", messages: $json.messages, max_tokens: 350, temperature: 0.75 }) }}","options":{"timeout":30000}},"credentials":{"openAiApi":{"id":"LFnyHUsH7lj5FEvQ","name":"scala-agent"}}},{"id":"a7","name":"Preparar Resposta","type":"n8n-nodes-base.code","typeVersion":2,"position":[1640,300],"parameters":{"jsCode":"const ctx = $('Montar Contexto').first().json;\nconst gpt = $input.first().json;\nconst aiResponse = (gpt.choices?.[0]?.message?.content || '').trim()\n  || 'Oi! Tive um probleminha aqui. Pode repetir sua mensagem?';\nreturn [{ json: { aiResponse, phoneNumber: ctx.phoneNumber, conversationId: ctx.conversationId, pushName: ctx.pushName, messageText: ctx.messageText } }];"}},{"id":"a8","name":"Enviar WhatsApp","type":"n8n-nodes-base.whatsApp","typeVersion":1,"position":[1880,300],"parameters":{"resource":"message","operation":"send","phoneNumberId":"971782562694033","recipientPhoneNumber":"={{ $json.phoneNumber }}","textBody":"={{ $json.aiResponse }}","additionalFields":{}},"credentials":{"whatsAppApi":{"id":"umUchtUGj2ZzikQ5","name":"WhatsApp account"}}},{"id":"a9","name":"Preparar Linhas","type":"n8n-nodes-base.code","typeVersion":2,"position":[2120,300],"parameters":{"jsCode":"// Lê contexto de Preparar Resposta (não do input, que é a resposta da API WhatsApp)\nconst ctx = $('Preparar Resposta').first().json;\nconst ts = new Date().toISOString();\nconst userRow = [ctx.conversationId, 'user',      ctx.messageText, ctx.pushName || '', ts];\nconst aiRow   = [ctx.conversationId, 'assistant', ctx.aiResponse,  ctx.pushName || '', ts];\nreturn [{ json: { values: [userRow, aiRow] } }];"}},{"id":"a11","name":"Resposta Fallback","type":"n8n-nodes-base.code","typeVersion":2,"position":[1400,520],"parameters":{"jsCode":"const ctx = $('Montar Contexto').first().json;\nreturn [{ json: { aiResponse: 'Oi! Tive um probleminha técnico. Pode repetir?', phoneNumber: ctx.phoneNumber, conversationId: ctx.conversationId, pushName: ctx.pushName, messageText: ctx.messageText } }];"}},{"id":"a3","name":"Buscar Histórico","type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[680,300],"parameters":{"method":"GET","url":"https://sheets.googleapis.com/v4/spreadsheets/1yDex-TLsx3TCxQ2ZZObTn6X_4Ln83ClMEiZI47y6h5U/values/Conversas","authentication":"predefinedCredentialType","nodeCredentialType":"googleSheetsOAuth2Api","options":{}},"credentials":{"googleSheetsOAuth2Api":{"id":"UeSaLFF10d9utrmA","name":"Google Sheets - Paulo"}}},{"id":"a10","name":"Salvar Conversa","type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[2360,300],"parameters":{"method":"POST","url":"https://sheets.googleapis.com/v4/spreadsheets/1yDex-TLsx3TCxQ2ZZObTn6X_4Ln83ClMEiZI47y6h5U/values/Conversas:append?valueInputOption=USER_ENTERED","authentication":"predefinedCredentialType","nodeCredentialType":"googleSheetsOAuth2Api","sendBody":true,"specifyBody":"json","jsonBody":"={{ JSON.stringify({ values: $json.values }) }}","options":{}},"credentials":{"googleSheetsOAuth2Api":{"id":"UeSaLFF10d9utrmA","name":"Google Sheets - Paulo"}}},{"id":"a12","name":"Aguardar","type":"n8n-nodes-base.wait","typeVersion":1.1,"position":[1760,300],"parameters":{"resume":"timeInterval","amount":3,"unit":"seconds"}},{"id":"a13","name":"Detectar Agendamento","type":"n8n-nodes-base.code","typeVersion":2,"position":[1640,560],"parameters":{"jsCode":"const ctx = $('Preparar Resposta').first().json;\nconst { aiResponse, pushName, phoneNumber } = ctx;\n\n// Só detecta CONFIRMAÇÃO EXPLÍCITA — nunca oferta de slots\nconst isBooking = /marcado para|agendado para/i.test(aiResponse);\nif (!isBooking) return [{ json: { ...ctx, isBooking: false } }];\n\n// Extrair data/hora do texto de confirmação (formato: DD/MM às HH:MM)\nconst dateMatch = aiResponse.match(/(\\d{2})\\/(\\d{2})\\s+às\\s+(\\d{2}):(\\d{2})/);\nif (!dateMatch) return [{ json: { ...ctx, isBooking: false } }];\n\nconst [_, day, month, hour, minute] = dateMatch;\nconst year = new Date().getFullYear();\nconst pad = n => String(n).padStart(2, '0');\n\nconst startISO = `${year}-${pad(parseInt(month))}-${pad(parseInt(day))}T${pad(parseInt(hour))}:${pad(parseInt(minute))}:00`;\nconst totalEndMin = parseInt(minute) + 20;\nconst endHour = parseInt(hour) + Math.floor(totalEndMin / 60);\nconst endMin = totalEndMin % 60;\nconst endISO = `${year}-${pad(parseInt(month))}-${pad(parseInt(day))}T${pad(endHour)}:${pad(endMin)}:00`;\n\nreturn [{ json: {\n  ...ctx,\n  isBooking: true,\n  eventTitle: 'Diagnóstico Gratuito Scala — ' + (pushName || phoneNumber),\n  eventDesc: 'Lead: ' + (pushName || 'não identificado') + '\\nTelefone: ' + phoneNumber + '\\nAgendado via WhatsApp',\n  startISO,\n  endISO,\n  requestId: 'diag-' + Date.now()\n} }];"}},{"id":"a14","name":"IF Agendamento","type":"n8n-nodes-base.if","typeVersion":2,"position":[1880,560],"parameters":{"conditions":{"options":{"caseSensitive":true,"leftValue":"","typeValidation":"strict","version":2},"conditions":[{"id":"chk1","leftValue":"={{ $json.isBooking }}","rightValue":"","operator":{"type":"boolean","operation":"true","singleValue":true}}],"combinator":"and"},"options":{}}},{"id":"a15","name":"Criar Evento Calendario","type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[2120,560],"parameters":{"method":"POST","url":"https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=none","authentication":"predefinedCredentialType","nodeCredentialType":"googleCalendarOAuth2Api","sendBody":true,"specifyBody":"json","jsonBody":"={{ JSON.stringify({ summary: $json.eventTitle, description: $json.eventDesc, start: { dateTime: $json.startISO + '-03:00', timeZone: 'America/Sao_Paulo' }, end: { dateTime: $json.endISO + '-03:00', timeZone: 'America/Sao_Paulo' }, conferenceData: { createRequest: { requestId: $json.requestId, conferenceSolutionKey: { type: 'hangoutsMeet' } } } }) }}","options":{}},"continueOnFail":true,"credentials":{"googleCalendarOAuth2Api":{"id":"QGp1FxkKTfYhYYJ0","name":"Google Calendar - Paulo"}}},{"id":"a16","name":"Montar Mensagem Final","type":"n8n-nodes-base.code","typeVersion":2,"position":[2360,560],"parameters":{"jsCode":"const ctx = $('Detectar Agendamento').first().json;\nconst cal = $input.first().json;\n\nconst meetLink = cal?.conferenceData?.entryPoints?.[0]?.uri || null;\n\nlet aiResponse = ctx.aiResponse || '';\nif (meetLink) {\n  // Remove any residual Meet link references injected by AI\n  aiResponse = aiResponse\n    .replace(/O link do Google Meet vai direto aqui após confirmar\\.?/gi, '')\n    .replace(/Paulo vai [^\\n.]*Google Meet[^\\n.]*[.!]?/gi, '')\n    .replace(/Link do Google Meet:?\\s*\\n?https?:\\/\\/[^\\s]*/gi, '')\n    .trim();\n  // Append meet link after the booking confirmation\n  aiResponse = aiResponse + '\\n🔗 ' + meetLink;\n}\n\nreturn [{ json: { ...ctx, aiResponse } }];"}}],"connections":{"Webhook WhatsApp":{"main":[[{"node":"Extrair Dados","type":"main","index":0}]]},"Limitar 1 Item":{"main":[[{"node":"Montar Contexto","type":"main","index":0}]]},"Montar Contexto":{"main":[[{"node":"GPT-4.1","type":"main","index":0}]]},"GPT-4.1":{"main":[[{"node":"Preparar Resposta","type":"main","index":0}]],"error":[[{"node":"Resposta Fallback","type":"main","index":0}]]},"Enviar WhatsApp":{"main":[[{"node":"Preparar Linhas","type":"main","index":0}]]},"Extrair Dados":{"main":[[{"node":"Buscar Histórico","type":"main","index":0}]]},"Buscar Histórico":{"main":[[{"node":"Limitar 1 Item","type":"main","index":0}]]},"Preparar Linhas":{"main":[[{"node":"Salvar Conversa","type":"main","index":0}]]},"Preparar Resposta":{"main":[[{"node":"Detectar Agendamento","type":"main","index":0}]]},"Resposta Fallback":{"main":[[{"node":"Aguardar","type":"main","index":0}]]},"Aguardar":{"main":[[{"node":"Enviar WhatsApp","type":"main","index":0}]]},"Detectar Agendamento":{"main":[[{"node":"IF Agendamento","type":"main","index":0}]]},"IF Agendamento":{"main":[[{"node":"Criar Evento Calendario","type":"main","index":0}],[{"node":"Aguardar","type":"main","index":0}]]},"Criar Evento Calendario":{"main":[[{"node":"Montar Mensagem Final","type":"main","index":0}]]},"Montar Mensagem Final":{"main":[[{"node":"Aguardar","type":"main","index":0}]]}},"settings":{"executionOrder":"v1","saveManualExecutions":true,"callerPolicy":"workflowsFromSameOwner","availableInMCP":false},"staticData":null,"meta":null,"pinData":null,"versionId":"7343609d-264d-4a79-a44d-0d0bf83254ba","activeVersionId":"7343609d-264d-4a79-a44d-0d0bf83254ba","versionCounter":45,"triggerCount":1,"shared":[{"updatedAt":"2026-03-25T03:27:36.142Z","createdAt":"2026-03-25T03:27:36.142Z","role":"workflow:owner","workflowId":"S22OxWxT77a1geK8","projectId":"4fhKBbB4lEBuxqVT","project":{"updatedAt":"2026-03-09T14:37:49.815Z","createdAt":"2026-03-09T14:14:16.132Z","id":"4fhKBbB4lEBuxqVT","name":"Paulo Nunan <ph.nunan@gmail.com>","type":"personal","icon":null,"description":null,"creatorId":"cdef1802-d0c6-490f-add8-cd6f5c4b604d"}}],"tags":[],"activeVersion":{"updatedAt":"2026-03-25T06:22:28.064Z","createdAt":"2026-03-25T06:22:28.064Z","versionId":"7343609d-264d-4a79-a44d-0d0bf83254ba","workflowId":"S22OxWxT77a1geK8","nodes":[{"id":"a1","name":"Webhook WhatsApp","type":"n8n-nodes-base.webhook","typeVersion":2,"position":[200,300],"webhookId":"whatsapp-ana-post","parameters":{"httpMethod":"POST","path":"whatsapp-ana","responseMode":"onReceived","responseCode":"200","options":{}}},{"id":"a2","name":"Extrair Dados","type":"n8n-nodes-base.code","typeVersion":2,"position":[440,300],"parameters":{"jsCode":"const trigger = $input.first().json;\nconst body = trigger.body || trigger;\nconst entry = body?.entry?.[0];\nconst change = entry?.changes?.[0];\nconst value = change?.value;\nconst msg = value?.messages?.[0];\n\nif (!msg || !msg.from) return [];\n\nconst phoneNumber = msg.from;\nconst pushName = (value?.contacts?.[0]?.profile?.name || '').split(' ')[0];\nconst conversationId = phoneNumber;\nconst messageType = msg.type;\n\nlet messageText = '';\nif (messageType === 'text') {\n  messageText = (msg.text?.body || '').trim();\n} else {\n  const labels = { audio: 'áudio', image: 'imagem', video: 'vídeo', document: 'documento', sticker: 'figurinha' };\n  messageText = '[Lead enviou ' + (labels[messageType] || messageType) + ']';\n}\n\nif (!messageText) return [];\nreturn [{ json: { phoneNumber, pushName, conversationId, messageText, messageType } }];"}},{"id":"a4","name":"Limitar 1 Item","type":"n8n-nodes-base.code","typeVersion":2,"position":[920,300],"parameters":{"jsCode":"return [{ json: {} }];"}},{"id":"a5","name":"Montar Contexto","type":"n8n-nodes-base.code","typeVersion":2,"position":[1160,300],"parameters":{"jsCode":"const data = $('Extrair Dados').first().json;\nconst { phoneNumber, pushName, conversationId, messageText } = data;\n\nconst oneDayAgo = new Date(Date.now() - 24 * 3600 * 1000).toISOString();\nconst rawSheets = $('Buscar Histórico').first().json;\nconst rows = rawSheets.values || [];\nconst headers = rows[0] || [];\nconst allRows = rows.slice(1).map(row => {\n  const obj = {};\n  headers.forEach((h, i) => { obj[h] = row[i] || ''; });\n  return { json: obj };\n});\n\nconst history = allRows\n  .filter(r => r.json.conversationId === conversationId || r.json.conversationId === 'scala_' + conversationId)\n  .filter(r => !r.json.timestamp || r.json.timestamp >= oneDayAgo)\n  .sort((a, b) => new Date(a.json.timestamp || 0) - new Date(b.json.timestamp || 0))\n  .slice(-20)\n  .map(r => ({ role: r.json.role, content: r.json.content }))\n  .filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim());\n\nconst lastUser = history.filter(m => m.role === 'user').slice(-1)[0];\nif (lastUser && lastUser.content === messageText) return [];\n\nconst isFirstMessage = history.length === 0;\n\n// Gerar 6 slots disponíveis\nconst slots = [];\nconst d = new Date();\nd.setMinutes(0, 0, 0);\nd.setHours(d.getHours() + 2);\nfor (let i = 0; i < 300 && slots.length < 6; i++) {\n  const day = d.getDay(), hour = d.getHours();\n  if (day === 0) { d.setDate(d.getDate() + 1); d.setHours(9); continue; }\n  if (day === 6) { d.setDate(d.getDate() + 2); d.setHours(9); continue; }\n  if (hour < 9)  { d.setHours(9); continue; }\n  if (hour >= 17){ d.setDate(d.getDate() + 1); d.setHours(9); continue; }\n  const dn = ['dom','seg','ter','qua','qui','sex','sáb'][day];\n  slots.push(dn + ' ' + String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0') + ' às ' + String(hour).padStart(2,'0') + ':00');\n  d.setHours(hour + 2);\n}\nconst slotsText = slots.join('\\n');\n\nconst nome = pushName || '';\nconst nomeStr = nome ? nome : 'você';\n\n// Detectar origem: veio do site ou anuncio?\nconst fromSite = isFirstMessage && /vim pelo site|diagn[oó]stico gratuito|quero agendar.*diagn[oó]s/i.test(messageText);\n\nlet greetingInstruction;\nif (isFirstMessage) {\n  if (fromSite) {\n    greetingInstruction = `PRIMEIRA MENSAGEM — Variante A (lead veio do site):\nUse EXATAMENTE esta abertura:\n\"Oi, ${nome || '[Nome]'}! 😊 Que bom te ver por aqui! Me chamo Ana, sou consultora da Scala. Vou te ajudar a preparar tudo para o diagnóstico com o Paulo ser 100% aproveitado pra você.\nAntes de mais nada — me conta: qual é o seu negócio?\"`;\n  } else {\n    greetingInstruction = `PRIMEIRA MENSAGEM — Variante B (orgânico):\nUse esta abertura:\n\"Oi, ${nome || '[Nome]'}! Tudo bem? 😊 Me chamo Ana, sou consultora da Scala — a gente constrói ecossistemas de vendas automatizados com IA para empresas que querem crescer sem aumentar equipe.\nMe conta: como você chegou até a gente?\"`;\n  }\n} else {\n  greetingInstruction = 'CONTINUAÇÃO: PROIBIDO usar \"Oi\", \"Olá\" ou nome no início da mensagem. Vá direto ao conteúdo.';\n}\n\nconst prompt = `Você é Ana, consultora da Scala Automate — empresa especializada em automação de marketing, atendimento e comercial com IA para empresas que querem crescer sem aumentar equipe.\n\nMISSÃO: conduzir o lead pelo fluxo de qualificação e agendar o diagnóstico gratuito de 30 min com Paulo Nunan.\n\n=== IDENTIDADE ===\n- Humana, calorosa, direta e especialista\n- NUNCA revele que é IA\n- Máx 2 linhas por mensagem (exceto Passo 3 e Passo 5 que são mais longos)\n- 1 pergunta por mensagem\n- Tom consultivo, nunca de vendedor\n- Não use estatísticas nas perguntas de qualificação — guarde para o Passo 5\n\n=== REGRA DE SAUDÇÃO ===\n${greetingInstruction}\n\n=== FLUXO DE ATENDIMENTO (8 PASSOS) ===\n\nPASSO 1 — CONEXÃO INICIAL\nJá descrito acima. Objetivo: criar rapport e descobrir o negócio do lead.\n\nPASSO 2 — IDENTIFICAÇÃO DA TRILHA\nApós o lead falar sobre o negócio, pergunte:\n\"Entendi! Pra nossa conversa ser o mais útil possível pra você, me diz: qual área do seu negócio você sente que está mais travada hoje?\n\n1️⃣ Atendimento — responder leads, qualificar, agendar\n2️⃣ Marketing — campanhas, relatórios, gestão de tráfego\n3️⃣ Comercial — follow-up, propostas, CRM\n4️⃣ Outra área — me conta qual\"\n\nInterprete livremente: \"WhatsApp\", \"chatbot\", \"vendas\", \"tráfego\", \"leads\" etc. — mapeie para a trilha correta.\n\nPASSO 3 — RECONHECIMENTO DA DOR POR TRILHA\nQuando o lead identificar a trilha, mostre as possibilidades da área dele:\n\nTRILHA A — Atendimento:\n\"Atendimento é uma das áreas com mais demanda agora — faz total sentido.\nUltimamente as empresas estão automatizando muito:\n\n📲 Resposta imediata no WhatsApp 24/7\n🎯 Qualificação automática de leads antes do humano entrar\n📅 Agendamento de reuniões sem precisar de SDR\n🔄 Follow-up automático para leads que sumiram\n\nAlgum desses é o que você precisa? Se for outra coisa, sem problema — a gente conversa no diagnóstico mesmo 😊\"\n\nTRILHA B — Marketing:\n\"Marketing quando bem automatizado muda completamente o jogo — e muita empresa ainda faz tudo na mão.\nO que mais estamos implementando por aí:\n\n📊 Relatórios automáticos de campanhas direto no WhatsApp\n🤖 Agente que cria e edita campanhas por comando de texto\n🔍 Análise de performance personalizada com alertas\n📋 Integração entre Meta Ads, Google Ads e CRM automaticamente\n\nAlgum desses é o que você precisa? Ou é outra coisa?\"\n\nTRILHA C — Comercial:\n\"Comercial automatizado é o que separa quem escala de quem fica preso no operacional — faz muito sentido.\nO que mais estamos construindo:\n\n📧 Follow-up automático por WhatsApp + email sem perder nenhum lead\n📝 Propostas geradas automaticamente com dados do CRM\n🏆 Classificação automática de leads por temperatura (quente/morno/frio)\n📈 Dashboard de vendas atualizado em tempo real\n\nAlgum desses é o que você precisa?\"\n\nTRILHA D — Outra área:\n\"Que interessante! Me conta mais — o que exatamente está travando nessa área? Quero entender direito antes de te dar qualquer direcionamento 😊\"\n\nPASSO 4 — APROFUNDAMENTO DA DOR (2 perguntas, UMA POR VEZ, mensagens separadas)\n\nTRILHA A:\n  P1: \"${nomeStr}, me diz uma coisa — hoje quando um lead chega no seu WhatsApp fora do horário comercial, o que acontece com ele?\"\n  P2: \"E em média, quanto tempo leva até alguém da sua equipe responder um lead novo?\"\n\nTRILHA B:\n  P1: \"${nomeStr}, hoje você consegue saber, de cabeça, qual campanha trouxe mais leads qualificados no último mês?\"\n  P2: \"E quando uma campanha começa a performar mal — você descobre por conta própria ou alguém te avisa?\"\n\nTRILHA C:\n  P1: \"${nomeStr}, hoje quando um lead pede uma proposta, quanto tempo leva até ela chegar na mão dele?\"\n  P2: \"E os leads que não fecharam na primeira conversa — tem algum processo de follow-up, ou acaba ficando pra depois?\"\n\nTRILHA D: faça 2 perguntas abertas relevantes ao que o lead descreveu, uma por vez.\n\nPASSO 5 — TRANSIÇÃO E RESUMO (Micro-Fechamento)\nApós as 2 perguntas de aprofundamento, gere dinamicamente:\n\"${nomeStr}, com o que você me contou já consigo ter uma visão bem clara do que está travando seu negócio.\n[RESUMO PERSONALIZADO — 1 frase específica e cirúrgica baseada nas respostas do lead]\nIsso é exatamente o tipo de coisa que a gente resolve — e no diagnóstico o Paulo vai te mostrar como ficaria isso funcionando no seu negócio especificamente.\n\nPosso te garantir: você vai sair da call com clareza total de qual é o próximo passo, independente de fechar ou não com a gente. 🎯\"\n\nPASSO 6 — AGENDAMENTO\nLogo após o Passo 5:\n\"Tenho agenda disponível para o Paulo te atender:\n\n📅 [slot1]\n📅 [slot2]\n\nQual fica melhor pra você? (São 30 minutinhos, online, gratuito e sem compromisso — você decide depois se faz sentido pra você)\"\n\nIMPORTANTE: Não mencione Google Meet nesta mensagem.\n\nPASSO 7 — CONFIRMAÇÃO + MICRO-COMPROMISSO\nQuando o lead confirmar um horário, use EXATAMENTE este formato:\n\"Perfeito! ✅ Marcado para [dia DD/MM] às [HH:MM].\n\nAh, ${nomeStr} — salva meu contato aqui como \\\"Ana | Scala\\\" pra você não perder o lembrete 😊 Qualquer dúvida antes da call, pode me chamar aqui mesmo!\"\n\nATENÇÃO: O formato exato \"Marcado para DD/MM às HH:MM\" é OBRIGATÓRIO — o sistema usa isso para registrar o evento automaticamente.\n\n=== NEGOCIAÇÃO DE HORÁRIO ===\nSe o lead não puder nos horários oferecidos:\n1. \"Sem problema! Que dia dessa semana você teria uns 30 min? Tenho manhã e tarde disponíveis.\"\n2. Quando indicar dia/período, ofereça 2 slots compatíveis das DISPONIBILIDADES abaixo\n3. Continue até confirmar com: \"Perfeito! ✅ Marcado para [dia DD/MM] às [HH:MM].\"\n\n=== TRATAMENTO DE DESVIOS ===\n\nPREÇO: \"Os valores variam bastante dependendo do que a gente vai construir pra você — por isso o diagnóstico existe: pra te dar uma proposta real, não um número genérico. O diagnóstico é gratuito e sem compromisso. Você decide depois se faz sentido. 😊\"\n→ Após resposta, volte ao agendamento (Passo 6).\n\nVAGO (\"quero automatizar tudo\"): \"Haha, entendo — quando a gente vê o potencial da automação, quer tudo de uma vez! 😄 Mas pra nossa reunião ser realmente útil pra você, me ajuda a focar: se você pudesse resolver uma coisa só no seu negócio hoje, qual seria?\"\n\nNÃO É DECISOR: \"Faz todo sentido! O diagnóstico pode ser feito com os dois juntos — na verdade é até melhor assim, porque as decisões ficam mais rápidas quando todo mundo está na mesma página. Você consegue confirmar com seu sócio e me dizer quando vocês dois têm disponibilidade?\"\n\nJÁ TEM SOLUÇÃO: \"Que ótimo que você já está no caminho certo! A maioria dos negócios que a gente atende também já usa alguma ferramenta — o que fazemos é conectar tudo num ecossistema que funciona junto, sem silos. Às vezes o problema não é a ferramenta, é como as peças estão conectadas. Vale 30 min pra ver se tem algo que pode melhorar?\"\n\nSILÊNCIO / INATIVIDADE: \"${nomeStr}, vi que você ficou com uma dúvida no ar — fica à vontade pra me contar, tô aqui! 😊 Se preferir, posso já te mandar os horários disponíveis pra você escolher quando for melhor.\"\n\n=== ESTATÍSTICAS (use APENAS no Passo 5 ou em objeções — nunca nas perguntas de qualificação) ===\n- \"65% dos leads sem resposta em 5 min vão pro concorrente\" (Harvard Business Review)\n- \"Automação de marketing gera +14,5% nas vendas B2B\" (Annuitas Group)\n- \"Follow-up automatizado reduz custo por lead em até 60%\"\n- \"80% dos leads qualificados não compram no 1º contato — nutrição é o que converte\"\n- \"Negócios com atendimento automatizado convertem até 3x mais leads\"\n- \"Empresas que respondem em menos de 1h têm 7x mais chance de qualificar\" (MIT)\n\nDISPONIBILIDADES (use estes horários nas ofertas e negociações):\n${slotsText}\n\n${pushName ? 'Lead: ' + pushName : ''}`;\n\nconst messages = [\n  { role: 'system', content: prompt },\n  ...history,\n  { role: 'user', content: messageText }\n];\n\nreturn [{ json: { messages, phoneNumber, conversationId, pushName, messageText } }];"}},{"id":"a6","name":"GPT-4.1","type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[1400,300],"parameters":{"method":"POST","url":"https://api.openai.com/v1/chat/completions","authentication":"predefinedCredentialType","nodeCredentialType":"openAiApi","sendBody":true,"specifyBody":"json","jsonBody":"={{ JSON.stringify({ model: \"gpt-4.1\", messages: $json.messages, max_tokens: 350, temperature: 0.75 }) }}","options":{"timeout":30000}},"credentials":{"openAiApi":{"id":"LFnyHUsH7lj5FEvQ","name":"scala-agent"}}},{"id":"a7","name":"Preparar Resposta","type":"n8n-nodes-base.code","typeVersion":2,"position":[1640,300],"parameters":{"jsCode":"const ctx = $('Montar Contexto').first().json;\nconst gpt = $input.first().json;\nconst aiResponse = (gpt.choices?.[0]?.message?.content || '').trim()\n  || 'Oi! Tive um probleminha aqui. Pode repetir sua mensagem?';\nreturn [{ json: { aiResponse, phoneNumber: ctx.phoneNumber, conversationId: ctx.conversationId, pushName: ctx.pushName, messageText: ctx.messageText } }];"}},{"id":"a8","name":"Enviar WhatsApp","type":"n8n-nodes-base.whatsApp","typeVersion":1,"position":[1880,300],"parameters":{"resource":"message","operation":"send","phoneNumberId":"971782562694033","recipientPhoneNumber":"={{ $json.phoneNumber }}","textBody":"={{ $json.aiResponse }}","additionalFields":{}},"credentials":{"whatsAppApi":{"id":"umUchtUGj2ZzikQ5","name":"WhatsApp account"}}},{"id":"a9","name":"Preparar Linhas","type":"n8n-nodes-base.code","typeVersion":2,"position":[2120,300],"parameters":{"jsCode":"// Lê contexto de Preparar Resposta (não do input, que é a resposta da API WhatsApp)\nconst ctx = $('Preparar Resposta').first().json;\nconst ts = new Date().toISOString();\nconst userRow = [ctx.conversationId, 'user',      ctx.messageText, ctx.pushName || '', ts];\nconst aiRow   = [ctx.conversationId, 'assistant', ctx.aiResponse,  ctx.pushName || '', ts];\nreturn [{ json: { values: [userRow, aiRow] } }];"}},{"id":"a11","name":"Resposta Fallback","type":"n8n-nodes-base.code","typeVersion":2,"position":[1400,520],"parameters":{"jsCode":"const ctx = $('Montar Contexto').first().json;\nreturn [{ json: { aiResponse: 'Oi! Tive um probleminha técnico. Pode repetir?', phoneNumber: ctx.phoneNumber, conversationId: ctx.conversationId, pushName: ctx.pushName, messageText: ctx.messageText } }];"}},{"id":"a3","name":"Buscar Histórico","type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[680,300],"parameters":{"method":"GET","url":"https://sheets.googleapis.com/v4/spreadsheets/1yDex-TLsx3TCxQ2ZZObTn6X_4Ln83ClMEiZI47y6h5U/values/Conversas","authentication":"predefinedCredentialType","nodeCredentialType":"googleSheetsOAuth2Api","options":{}},"credentials":{"googleSheetsOAuth2Api":{"id":"UeSaLFF10d9utrmA","name":"Google Sheets - Paulo"}}},{"id":"a10","name":"Salvar Conversa","type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[2360,300],"parameters":{"method":"POST","url":"https://sheets.googleapis.com/v4/spreadsheets/1yDex-TLsx3TCxQ2ZZObTn6X_4Ln83ClMEiZI47y6h5U/values/Conversas:append?valueInputOption=USER_ENTERED","authentication":"predefinedCredentialType","nodeCredentialType":"googleSheetsOAuth2Api","sendBody":true,"specifyBody":"json","jsonBody":"={{ JSON.stringify({ values: $json.values }) }}","options":{}},"credentials":{"googleSheetsOAuth2Api":{"id":"UeSaLFF10d9utrmA","name":"Google Sheets - Paulo"}}},{"id":"a12","name":"Aguardar","type":"n8n-nodes-base.wait","typeVersion":1.1,"position":[1760,300],"parameters":{"resume":"timeInterval","amount":3,"unit":"seconds"}},{"id":"a13","name":"Detectar Agendamento","type":"n8n-nodes-base.code","typeVersion":2,"position":[1640,560],"parameters":{"jsCode":"const ctx = $('Preparar Resposta').first().json;\nconst { aiResponse, pushName, phoneNumber } = ctx;\n\n// Só detecta CONFIRMAÇÃO EXPLÍCITA — nunca oferta de slots\nconst isBooking = /marcado para|agendado para/i.test(aiResponse);\nif (!isBooking) return [{ json: { ...ctx, isBooking: false } }];\n\n// Extrair data/hora do texto de confirmação (formato: DD/MM às HH:MM)\nconst dateMatch = aiResponse.match(/(\\d{2})\\/(\\d{2})\\s+às\\s+(\\d{2}):(\\d{2})/);\nif (!dateMatch) return [{ json: { ...ctx, isBooking: false } }];\n\nconst [_, day, month, hour, minute] = dateMatch;\nconst year = new Date().getFullYear();\nconst pad = n => String(n).padStart(2, '0');\n\nconst startISO = `${year}-${pad(parseInt(month))}-${pad(parseInt(day))}T${pad(parseInt(hour))}:${pad(parseInt(minute))}:00`;\nconst totalEndMin = parseInt(minute) + 20;\nconst endHour = parseInt(hour) + Math.floor(totalEndMin / 60);\nconst endMin = totalEndMin % 60;\nconst endISO = `${year}-${pad(parseInt(month))}-${pad(parseInt(day))}T${pad(endHour)}:${pad(endMin)}:00`;\n\nreturn [{ json: {\n  ...ctx,\n  isBooking: true,\n  eventTitle: 'Diagnóstico Gratuito Scala — ' + (pushName || phoneNumber),\n  eventDesc: 'Lead: ' + (pushName || 'não identificado') + '\\nTelefone: ' + phoneNumber + '\\nAgendado via WhatsApp',\n  startISO,\n  endISO,\n  requestId: 'diag-' + Date.now()\n} }];"}},{"id":"a14","name":"IF Agendamento","type":"n8n-nodes-base.if","typeVersion":2,"position":[1880,560],"parameters":{"conditions":{"options":{"caseSensitive":true,"leftValue":"","typeValidation":"strict","version":2},"conditions":[{"id":"chk1","leftValue":"={{ $json.isBooking }}","rightValue":"","operator":{"type":"boolean","operation":"true","singleValue":true}}],"combinator":"and"},"options":{}}},{"id":"a15","name":"Criar Evento Calendario","type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[2120,560],"parameters":{"method":"POST","url":"https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=none","authentication":"predefinedCredentialType","nodeCredentialType":"googleCalendarOAuth2Api","sendBody":true,"specifyBody":"json","jsonBody":"={{ JSON.stringify({ summary: $json.eventTitle, description: $json.eventDesc, start: { dateTime: $json.startISO + '-03:00', timeZone: 'America/Sao_Paulo' }, end: { dateTime: $json.endISO + '-03:00', timeZone: 'America/Sao_Paulo' }, conferenceData: { createRequest: { requestId: $json.requestId, conferenceSolutionKey: { type: 'hangoutsMeet' } } } }) }}","options":{}},"continueOnFail":true,"credentials":{"googleCalendarOAuth2Api":{"id":"QGp1FxkKTfYhYYJ0","name":"Google Calendar - Paulo"}}},{"id":"a16","name":"Montar Mensagem Final","type":"n8n-nodes-base.code","typeVersion":2,"position":[2360,560],"parameters":{"jsCode":"const ctx = $('Detectar Agendamento').first().json;\nconst cal = $input.first().json;\n\nconst meetLink = cal?.conferenceData?.entryPoints?.[0]?.uri || null;\n\nlet aiResponse = ctx.aiResponse || '';\nif (meetLink) {\n  // Remove any residual Meet link references injected by AI\n  aiResponse = aiResponse\n    .replace(/O link do Google Meet vai direto aqui após confirmar\\.?/gi, '')\n    .replace(/Paulo vai [^\\n.]*Google Meet[^\\n.]*[.!]?/gi, '')\n    .replace(/Link do Google Meet:?\\s*\\n?https?:\\/\\/[^\\s]*/gi, '')\n    .trim();\n  // Append meet link after the booking confirmation\n  aiResponse = aiResponse + '\\n🔗 ' + meetLink;\n}\n\nreturn [{ json: { ...ctx, aiResponse } }];"}}],"connections":{"Webhook WhatsApp":{"main":[[{"node":"Extrair Dados","type":"main","index":0}]]},"Limitar 1 Item":{"main":[[{"node":"Montar Contexto","type":"main","index":0}]]},"Montar Contexto":{"main":[[{"node":"GPT-4.1","type":"main","index":0}]]},"GPT-4.1":{"main":[[{"node":"Preparar Resposta","type":"main","index":0}]],"error":[[{"node":"Resposta Fallback","type":"main","index":0}]]},"Enviar WhatsApp":{"main":[[{"node":"Preparar Linhas","type":"main","index":0}]]},"Extrair Dados":{"main":[[{"node":"Buscar Histórico","type":"main","index":0}]]},"Buscar Histórico":{"main":[[{"node":"Limitar 1 Item","type":"main","index":0}]]},"Preparar Linhas":{"main":[[{"node":"Salvar Conversa","type":"main","index":0}]]},"Preparar Resposta":{"main":[[{"node":"Detectar Agendamento","type":"main","index":0}]]},"Resposta Fallback":{"main":[[{"node":"Aguardar","type":"main","index":0}]]},"Aguardar":{"main":[[{"node":"Enviar WhatsApp","type":"main","index":0}]]},"Detectar Agendamento":{"main":[[{"node":"IF Agendamento","type":"main","index":0}]]},"IF Agendamento":{"main":[[{"node":"Criar Evento Calendario","type":"main","index":0}],[{"node":"Aguardar","type":"main","index":0}]]},"Criar Evento Calendario":{"main":[[{"node":"Montar Mensagem Final","type":"main","index":0}]]},"Montar Mensagem Final":{"main":[[{"node":"Aguardar","type":"main","index":0}]]}},"authors":"Paulo Nunan","name":null,"description":null,"autosaved":false,"workflowPublishHistory":[{"createdAt":"2026-03-25T06:22:28.572Z","id":67,"workflowId":"S22OxWxT77a1geK8","versionId":"7343609d-264d-4a79-a44d-0d0bf83254ba","event":"activated","userId":"cdef1802-d0c6-490f-add8-cd6f5c4b604d"},{"createdAt":"2026-03-25T06:22:28.511Z","id":66,"workflowId":"S22OxWxT77a1geK8","versionId":"7343609d-264d-4a79-a44d-0d0bf83254ba","event":"deactivated","userId":"cdef1802-d0c6-490f-add8-cd6f5c4b604d"}]}}
+{
+  "updatedAt": "2026-03-26T04:09:50.637Z",
+  "createdAt": "2026-03-25T03:27:36.140Z",
+  "id": "S22OxWxT77a1geK8",
+  "name": "Ana — Agente WhatsApp v2",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "a1",
+      "name": "Webhook WhatsApp",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "whatsapp-ana-post",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-ana",
+        "responseMode": "onReceived",
+        "responseCode": "200",
+        "options": {}
+      }
+    },
+    {
+      "id": "a2",
+      "name": "Extrair Dados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const trigger = $input.first().json;\nconst body = trigger.body || trigger;\nconst entry = body?.entry?.[0];\nconst change = entry?.changes?.[0];\nconst value = change?.value;\nconst msg = value?.messages?.[0];\n\nif (!msg || !msg.from) return [];\n\nconst phoneNumber = msg.from;\nconst pushName = (value?.contacts?.[0]?.profile?.name || '').split(' ')[0];\nconst conversationId = phoneNumber;\nconst messageType = msg.type;\n\nlet messageText = '';\nif (messageType === 'text') {\n  messageText = (msg.text?.body || '').trim();\n} else {\n  const labels = { audio: 'áudio', image: 'imagem', video: 'vídeo', document: 'documento', sticker: 'figurinha' };\n  messageText = '[Lead enviou ' + (labels[messageType] || messageType) + ']';\n}\n\nif (!messageText) return [];\nreturn [{ json: { phoneNumber, pushName, conversationId, messageText, messageType } }];"
+      }
+    },
+    {
+      "id": "a4",
+      "name": "Limitar 1 Item",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        300
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: {} }];"
+      }
+    },
+    {
+      "id": "a5",
+      "name": "Montar Contexto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const data = $('Extrair Dados').first().json;\nconst { phoneNumber, pushName, conversationId, messageText } = data;\n\nconst oneDayAgo = new Date(Date.now() - 24 * 3600 * 1000).toISOString();\nconst rawSheets = $('Buscar Histórico').first().json;\nconst rows = rawSheets.values || [];\nconst headers = rows[0] || [];\nconst allRows = rows.slice(1).map(row => {\n  const obj = {};\n  headers.forEach((h, i) => { obj[h] = row[i] || ''; });\n  return { json: obj };\n});\n\nconst history = allRows\n  .filter(r => r.json.conversationId === conversationId || r.json.conversationId === 'scala_' + conversationId)\n  .filter(r => !r.json.timestamp || r.json.timestamp >= oneDayAgo)\n  .sort((a, b) => new Date(a.json.timestamp || 0) - new Date(b.json.timestamp || 0))\n  .slice(-20)\n  .map(r => ({ role: r.json.role, content: r.json.content }))\n  .filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim());\n\nconst lastUser = history.filter(m => m.role === 'user').slice(-1)[0];\nif (lastUser && lastUser.content === messageText) return [];\n\nconst isFirstMessage = history.length === 0;\n\nconst slots = [];\nconst d = new Date();\nd.setMinutes(0, 0, 0);\nd.setHours(d.getHours() + 2);\nfor (let i = 0; i < 300 && slots.length < 6; i++) {\n  const day = d.getDay(), hour = d.getHours();\n  if (day === 0) { d.setDate(d.getDate() + 1); d.setHours(9); continue; }\n  if (day === 6) { d.setDate(d.getDate() + 2); d.setHours(9); continue; }\n  if (hour < 9)  { d.setHours(9); continue; }\n  if (hour >= 17){ d.setDate(d.getDate() + 1); d.setHours(9); continue; }\n  const dn = ['dom','seg','ter','qua','qui','sex','sáb'][day];\n  slots.push(dn + ' ' + String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0') + ' às ' + String(hour).padStart(2,'0') + ':00');\n  d.setHours(hour + 2);\n}\nconst slotsText = slots.join('\\n');\n\nconst nome = pushName || '';\nconst nomeStr = nome ? nome : 'você';\n\nconst fromSite = isFirstMessage && /vim pelo site|diagn[oó]stico gratuito|quero agendar.*diagn[oó]s/i.test(messageText);\n\nlet greetingInstruction;\nif (isFirstMessage) {\n  if (fromSite) {\n    greetingInstruction = `PRIMEIRA MENSAGEM — Variante A (lead veio do site):\\nUse EXATAMENTE esta abertura:\\n\"Oi, ${nome || '[Nome]'}! 😊 Que bom te ver por aqui! Me chamo Ana, sou consultora da Scala. Vou te ajudar a preparar tudo para o diagnóstico com o Paulo ser 100% aproveitado pra você.\\nAntes de mais nada — me conta: qual é o seu negócio?\"`;\n  } else {\n    greetingInstruction = `PRIMEIRA MENSAGEM — Variante B (orgânico):\\nUse esta abertura:\\n\"Oi, ${nome || '[Nome]'}! Tudo bem? 😊 Me chamo Ana, sou consultora da Scala — a gente constrói ecossistemas de vendas automatizados com IA para empresas que querem crescer sem aumentar equipe.\\nMe conta: como você chegou até a gente?\"`;\n  }\n} else {\n  greetingInstruction = 'CONTINUAÇÃO: PROIBIDO usar \"Oi\", \"Olá\" ou nome no início da mensagem. Vá direto ao conteúdo.';\n}\n\nconst prompt = `Você é Ana, consultora da Scala Automate — empresa especializada em automação de marketing, atendimento e comercial com IA para empresas que querem crescer sem aumentar equipe.\\n\\nMISSÃO: conduzir o lead pelo fluxo de qualificação e agendar o diagnóstico gratuito de 30 min com Paulo Nunan.\\n\\n=== IDENTIDADE ===\\n- Humana, calorosa, direta e especialista\\n- NUNCA revele que é IA\\n- Máx 2 linhas por mensagem (exceto Passo 3 e Passo 5 que são mais longos)\\n- 1 pergunta por mensagem\\n- Tom consultivo, nunca de vendedor\\n- Não use estatísticas nas perguntas de qualificação — guarde para o Passo 5\\n\\n=== REGRA DE SAUDÇÃO ===\\n${greetingInstruction}\\n\\n=== FLUXO DE ATENDIMENTO (8 PASSOS) ===\\n\\nPASSO 1 — CONEXÃO INICIAL\\nJá descrito acima. Objetivo: criar rapport e descobrir o negócio do lead.\\n\\nPASSO 2 — IDENTIFICAÇÃO DA TRILHA\\nApós o lead falar sobre o negócio, pergunte:\\n\"Entendi! Pra nossa conversa ser o mais útil possível pra você, me diz: qual área do seu negócio você sente que está mais travada hoje?\\n\\n1️⃣ Atendimento — responder leads, qualificar, agendar\\n2️⃣ Marketing — campanhas, relatórios, gestão de tráfego\\n3️⃣ Comercial — follow-up, propostas, CRM\\n4️⃣ Outra área — me conta qual\"\\n\\nInterprete livremente: \"WhatsApp\", \"chatbot\", \"vendas\", \"tráfego\", \"leads\" etc. — mapeie para a trilha correta.\\n\\nPASSO 3 — RECONHECIMENTO DA DOR POR TRILHA\\nQuando o lead identificar a trilha, mostre as possibilidades da área dele:\\n\\nTRILHA A — Atendimento:\\n\"Atendimento é uma das áreas com mais demanda agora — faz total sentido.\\nUltimamente as empresas estão automatizando muito:\\n\\n📲 Resposta imediata no WhatsApp 24/7\\n🎯 Qualificação automática de leads antes do humano entrar\\n📅 Agendamento de reuniões sem precisar de SDR\\n🔄 Follow-up automático para leads que sumiram\\n\\nAlgum desses é o que você precisa? Se for outra coisa, sem problema — a gente conversa no diagnóstico mesmo 😊\"\\n\\nTRILHA B — Marketing:\\n\"Marketing quando bem automatizado muda completamente o jogo — e muita empresa ainda faz tudo na mão.\\nO que mais estamos implementando por aí:\\n\\n📊 Relatórios automáticos de campanhas direto no WhatsApp\\n🤖 Agente que cria e edita campanhas por comando de texto\\n🔍 Análise de performance personalizada com alertas\\n📋 Integração entre Meta Ads, Google Ads e CRM automaticamente\\n\\nAlgum desses é o que você precisa? Ou é outra coisa?\"\\n\\nTRILHA C — Comercial:\\n\"Comercial automatizado é o que separa quem escala de quem fica preso no operacional — faz muito sentido.\\nO que mais estamos construindo:\\n\\n📧 Follow-up automático por WhatsApp + email sem perder nenhum lead\\n📝 Propostas geradas automaticamente com dados do CRM\\n🏆 Classificação automática de leads por temperatura (quente/morno/frio)\\n📈 Dashboard de vendas atualizado em tempo real\\n\\nAlgum desses é o que você precisa?\"\\n\\nTRILHA D — Outra área:\\n\"Que interessante! Me conta mais — o que exatamente está travando nessa área? Quero entender direito antes de te dar qualquer direcionamento 😊\"\\n\\nPASSO 4 — APROFUNDAMENTO DA DOR (2 perguntas, UMA POR VEZ, mensagens separadas)\\n\\nTRILHA A:\\n  P1: \"${nomeStr}, me diz uma coisa — hoje quando um lead chega no seu WhatsApp fora do horário comercial, o que acontece com ele?\"\\n  P2: \"E em média, quanto tempo leva até alguém da sua equipe responder um lead novo?\"\\n\\nTRILHA B:\\n  P1: \"${nomeStr}, hoje você consegue saber, de cabeça, qual campanha trouxe mais leads qualificados no último mês?\"\\n  P2: \"E quando uma campanha começa a performar mal — você descobre por conta própria ou alguém te avisa?\"\\n\\nTRILHA C:\\n  P1: \"${nomeStr}, hoje quando um lead pede uma proposta, quanto tempo leva até ela chegar na mão dele?\"\\n  P2: \"E os leads que não fecharam na primeira conversa — tem algum processo de follow-up, ou acaba ficando pra depois?\"\\n\\nTRILHA D: faça 2 perguntas abertas relevantes ao que o lead descreveu, uma por vez.\\n\\nPASSO 5 — TRANSIÇÃO E RESUMO (Micro-Fechamento)\\nApós as 2 perguntas de aprofundamento, gere dinamicamente:\\n\"${nomeStr}, com o que você me contou já consigo ter uma visão bem clara do que está travando seu negócio.\\n[RESUMO PERSONALIZADO — 1 frase específica e cirúrgica baseada nas respostas do lead]\\nIsso é exatamente o tipo de coisa que a gente resolve — e no diagnóstico o Paulo vai te mostrar como ficaria isso funcionando no seu negócio especificamente.\\n\\nPosso te garantir: você vai sair da call com clareza total de qual é o próximo passo, independente de fechar ou não com a gente. 🎯\"\\n\\nPASSO 6 — AGENDAMENTO\\nLogo após o Passo 5:\\n\"Tenho agenda disponível para o Paulo te atender:\\n\\n📅 [slot1]\\n📅 [slot2]\\n\\nQual fica melhor pra você? (São 30 minutinhos, online, gratuito e sem compromisso — você decide depois se faz sentido pra você)\"\\n\\nIMPORTANTE: Não mencione Google Meet nesta mensagem.\\n\\nPASSO 7 — CONFIRMAÇÃO + MICRO-COMPROMISSO\\nQuando o lead confirmar um horário, use EXATAMENTE este formato:\\n\"Perfeito! ✅ Marcado para [dia DD/MM] às [HH:MM].\\n\\nAh, ${nomeStr} — salva meu contato aqui como \\\\\"Ana | Scala\\\\\" pra você não perder o lembrete 😊 Qualquer dúvida antes da call, pode me chamar aqui mesmo!\"\\n\\nATENÇÃO: O formato exato \"Marcado para DD/MM às HH:MM\" é OBRIGATÓRIO — o sistema usa isso para registrar o evento automaticamente.\\n\\n=== NEGOCIAÇÃO DE HORÁRIO ===\\nSe o lead não puder nos horários oferecidos:\\n1. \"Sem problema! Que dia dessa semana você teria uns 30 min? Tenho manhã e tarde disponíveis.\"\\n2. Quando indicar dia/período, ofereça 2 slots compatíveis das DISPONIBILIDADES abaixo\\n3. Continue até confirmar com: \"Perfeito! ✅ Marcado para [dia DD/MM] às [HH:MM].\"\\n\\n=== TRATAMENTO DE DESVIOS ===\\n\\nPREÇO: \"Os valores variam bastante dependendo do que a gente vai construir pra você — por isso o diagnóstico existe: pra te dar uma proposta real, não um número genérico. O diagnóstico é gratuito e sem compromisso. Você decide depois se faz sentido. 😊\"\\n→ Após resposta, volte ao agendamento (Passo 6).\\n\\nVAGO (\\\"quero automatizar tudo\\\"): \\\"Haha, entendo — quando a gente vê o potencial da automação, quer tudo de uma vez! 😄 Mas pra nossa reunião ser realmente útil pra você, me ajuda a focar: se você pudesse resolver uma coisa só no seu negócio hoje, qual seria?\\\"\\n\\nNÃO É DECISOR: \\\"Faz todo sentido! O diagnóstico pode ser feito com os dois juntos — na verdade é até melhor assim, porque as decisões ficam mais rápidas quando todo mundo está na mesma página. Você consegue confirmar com seu sócio e me dizer quando vocês dois têm disponibilidade?\\\"\\n\\nJÁ TEM SOLUÇÃO: \\\"Que ótimo que você já está no caminho certo! A maioria dos negócios que a gente atende também já usa alguma ferramenta — o que fazemos é conectar tudo num ecossistema que funciona junto, sem silos. Às vezes o problema não é a ferramenta, é como as peças estão conectadas. Vale 30 min pra ver se tem algo que pode melhorar?\\\"\\n\\nSILÊNCIO / INATIVIDADE: \\\"${nomeStr}, vi que você ficou com uma dúvida no ar — fica à vontade pra me contar, tô aqui! 😊 Se preferir, posso já te mandar os horários disponíveis pra você escolher quando for melhor.\\\"\\n\\n=== ESTATÍSTICAS (use APENAS no Passo 5 ou em objeções — nunca nas perguntas de qualificação) ===\\n- \\\"65% dos leads sem resposta em 5 min vão pro concorrente\\\" (Harvard Business Review)\\n- \\\"Automação de marketing gera +14,5% nas vendas B2B\\\" (Annuitas Group)\\n- \\\"Follow-up automatizado reduz custo por lead em até 60%\\\"\\n- \\\"80% dos leads qualificados não compram no 1º contato — nutrição é o que converte\\\"\\n- \\\"Negócios com atendimento automatizado convertem até 3x mais leads\\\"\\n- \\\"Empresas que respondem em menos de 1h têm 7x mais chance de qualificar\\\" (MIT)\\n\\nDISPONIBILIDADES (use estes horários nas ofertas e negociações):\\n${slotsText}\\n\\n${pushName ? 'Lead: ' + pushName : ''}`;\n\nconst messages = [\n  { role: 'system', content: prompt },\n  ...history,\n  { role: 'user', content: messageText }\n];\n\nreturn [{ json: { messages, phoneNumber, conversationId, pushName, messageText } }];"
+      }
+    },
+    {
+      "id": "a6",
+      "name": "GPT-4.1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"gpt-4.1\", messages: $json.messages, max_tokens: 350, temperature: 0.75 }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "LFnyHUsH7lj5FEvQ",
+          "name": "scala-agent"
+        }
+      }
+    },
+    {
+      "id": "a7",
+      "name": "Preparar Resposta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1640,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Montar Contexto').first().json;\nconst gpt = $input.first().json;\nconst aiResponse = (gpt.choices?.[0]?.message?.content || '').trim()\n  || 'Oi! Tive um probleminha aqui. Pode repetir sua mensagem?';\nreturn [{ json: { aiResponse, phoneNumber: ctx.phoneNumber, conversationId: ctx.conversationId, pushName: ctx.pushName, messageText: ctx.messageText } }];"
+      }
+    },
+    {
+      "id": "a8",
+      "name": "Enviar WhatsApp",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [
+        1880,
+        300
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "phoneNumberId": "971782562694033",
+        "recipientPhoneNumber": "={{ $json.phoneNumber }}",
+        "textBody": "={{ $json.aiResponse }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "whatsAppApi": {
+          "id": "umUchtUGj2ZzikQ5",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "id": "a9",
+      "name": "Preparar Linhas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2120,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Preparar Resposta').first().json;\nconst ts = new Date().toISOString();\nconst userRow = [ctx.conversationId, 'user',      ctx.messageText, ctx.pushName || '', ts];\nconst aiRow   = [ctx.conversationId, 'assistant', ctx.aiResponse,  ctx.pushName || '', ts];\nreturn [{ json: { values: [userRow, aiRow] } }];"
+      }
+    },
+    {
+      "id": "a11",
+      "name": "Resposta Fallback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        520
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Montar Contexto').first().json;\nreturn [{ json: { aiResponse: 'Oi! Tive um probleminha técnico. Pode repetir?', phoneNumber: ctx.phoneNumber, conversationId: ctx.conversationId, pushName: ctx.pushName, messageText: ctx.messageText } }];"
+      }
+    },
+    {
+      "id": "a12",
+      "name": "Aguardar",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1760,
+        300
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 3,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "a13",
+      "name": "Detectar Agendamento",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1640,
+        560
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Preparar Resposta').first().json;\nconst { aiResponse, pushName, phoneNumber } = ctx;\n\nconst isBooking = /marcado para|agendado para/i.test(aiResponse);\nif (!isBooking) return [{ json: { ...ctx, isBooking: false } }];\n\nconst dateMatch = aiResponse.match(/(\\d{2})\\/(\\d{2})\\s+às\\s+(\\d{2}):(\\d{2})/);\nif (!dateMatch) return [{ json: { ...ctx, isBooking: false } }];\n\nconst [_, day, month, hour, minute] = dateMatch;\nconst year = new Date().getFullYear();\nconst pad = n => String(n).padStart(2, '0');\n\nconst startISO = `${year}-${pad(parseInt(month))}-${pad(parseInt(day))}T${pad(parseInt(hour))}:${pad(parseInt(minute))}:00`;\nconst totalEndMin = parseInt(minute) + 20;\nconst endHour = parseInt(hour) + Math.floor(totalEndMin / 60);\nconst endMin = totalEndMin % 60;\nconst endISO = `${year}-${pad(parseInt(month))}-${pad(parseInt(day))}T${pad(endHour)}:${pad(endMin)}:00`;\n\nreturn [{ json: {\n  ...ctx,\n  isBooking: true,\n  eventTitle: 'Diagnóstico Gratuito Scala — ' + (pushName || phoneNumber),\n  eventDesc: 'Lead: ' + (pushName || 'não identificado') + '\\nTelefone: ' + phoneNumber + '\\nAgendado via WhatsApp',\n  startISO,\n  endISO,\n  requestId: 'diag-' + Date.now()\n} }];"
+      }
+    },
+    {
+      "id": "a14",
+      "name": "IF Agendamento",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1880,
+        560
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "chk1",
+              "leftValue": "={{ $json.isBooking }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a15",
+      "name": "Criar Evento Calendario",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2120,
+        560
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=none",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ summary: $json.eventTitle, description: $json.eventDesc, start: { dateTime: $json.startISO + '-03:00', timeZone: 'America/Sao_Paulo' }, end: { dateTime: $json.endISO + '-03:00', timeZone: 'America/Sao_Paulo' }, conferenceData: { createRequest: { requestId: $json.requestId, conferenceSolutionKey: { type: 'hangoutsMeet' } } } }) }}",
+        "options": {}
+      },
+      "continueOnFail": true,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "QGp1FxkKTfYhYYJ0",
+          "name": "Google Calendar - Paulo"
+        }
+      }
+    },
+    {
+      "id": "a16",
+      "name": "Montar Mensagem Final",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2360,
+        560
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Detectar Agendamento').first().json;\nconst cal = $input.first().json;\n\nconst meetLink = cal?.conferenceData?.entryPoints?.[0]?.uri || null;\n\nlet aiResponse = ctx.aiResponse || '';\nif (meetLink) {\n  aiResponse = aiResponse\n    .replace(/O link do Google Meet vai direto aqui após confirmar\\.?/gi, '')\n    .replace(/Paulo vai [^\\n.]*Google Meet[^\\n.]*[.!]?/gi, '')\n    .replace(/Link do Google Meet:?\\s*\\n?https?:\\/\\/[^\\s]*/gi, '')\n    .trim();\n  aiResponse = aiResponse + '\\n🔗 ' + meetLink;\n}\n\nreturn [{ json: { ...ctx, aiResponse } }];"
+      }
+    },
+    {
+      "id": "a3",
+      "name": "Buscar Histórico",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://sheets.googleapis.com/v4/spreadsheets/1yDex-TLsx3TCxQ2ZZObTn6X_4Ln83ClMEiZI47y6h5U/values/Conversas",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "UeSaLFF10d9utrmA",
+          "name": "Google Sheets - Paulo"
+        }
+      }
+    },
+    {
+      "id": "a10",
+      "name": "Salvar Conversa",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2360,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://sheets.googleapis.com/v4/spreadsheets/1yDex-TLsx3TCxQ2ZZObTn6X_4Ln83ClMEiZI47y6h5U/values/Conversas:append?valueInputOption=USER_ENTERED",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ values: $json.values }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "UeSaLFF10d9utrmA",
+          "name": "Google Sheets - Paulo"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Extrair Dados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limitar 1 Item": {
+      "main": [
+        [
+          {
+            "node": "Montar Contexto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar Contexto": {
+      "main": [
+        [
+          {
+            "node": "GPT-4.1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GPT-4.1": {
+      "main": [
+        [
+          {
+            "node": "Preparar Resposta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Resposta Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Resposta": {
+      "main": [
+        [
+          {
+            "node": "Detectar Agendamento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detectar Agendamento": {
+      "main": [
+        [
+          {
+            "node": "IF Agendamento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Agendamento": {
+      "main": [
+        [
+          {
+            "node": "Criar Evento Calendario",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aguardar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar Evento Calendario": {
+      "main": [
+        [
+          {
+            "node": "Montar Mensagem Final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar Mensagem Final": {
+      "main": [
+        [
+          {
+            "node": "Aguardar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aguardar": {
+      "main": [
+        [
+          {
+            "node": "Enviar WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Preparar Linhas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resposta Fallback": {
+      "main": [
+        [
+          {
+            "node": "Aguardar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extrair Dados": {
+      "main": [
+        [
+          {
+            "node": "Buscar Histórico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Histórico": {
+      "main": [
+        [
+          {
+            "node": "Limitar 1 Item",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Linhas": {
+      "main": [
+        [
+          {
+            "node": "Salvar Conversa",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": null,
+  "versionId": "6038af51-b85d-473c-ae7b-3938c75abbf1",
+  "activeVersionId": "6038af51-b85d-473c-ae7b-3938c75abbf1",
+  "versionCounter": 83,
+  "triggerCount": 1,
+  "shared": [
+    {
+      "updatedAt": "2026-03-25T03:27:36.142Z",
+      "createdAt": "2026-03-25T03:27:36.142Z",
+      "role": "workflow:owner",
+      "workflowId": "S22OxWxT77a1geK8",
+      "projectId": "4fhKBbB4lEBuxqVT",
+      "project": {
+        "updatedAt": "2026-03-09T14:37:49.815Z",
+        "createdAt": "2026-03-09T14:14:16.132Z",
+        "id": "4fhKBbB4lEBuxqVT",
+        "name": "Paulo Nunan <ph.nunan@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "cdef1802-d0c6-490f-add8-cd6f5c4b604d"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-03-26T04:09:50.638Z",
+    "createdAt": "2026-03-26T04:09:50.638Z",
+    "versionId": "6038af51-b85d-473c-ae7b-3938c75abbf1",
+    "workflowId": "S22OxWxT77a1geK8",
+    "nodes": [
+      {
+        "id": "a1",
+        "name": "Webhook WhatsApp",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          200,
+          300
+        ],
+        "webhookId": "whatsapp-ana-post",
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "whatsapp-ana",
+          "responseMode": "onReceived",
+          "responseCode": "200",
+          "options": {}
+        }
+      },
+      {
+        "id": "a2",
+        "name": "Extrair Dados",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          440,
+          300
+        ],
+        "parameters": {
+          "jsCode": "const trigger = $input.first().json;\nconst body = trigger.body || trigger;\nconst entry = body?.entry?.[0];\nconst change = entry?.changes?.[0];\nconst value = change?.value;\nconst msg = value?.messages?.[0];\n\nif (!msg || !msg.from) return [];\n\nconst phoneNumber = msg.from;\nconst pushName = (value?.contacts?.[0]?.profile?.name || '').split(' ')[0];\nconst conversationId = phoneNumber;\nconst messageType = msg.type;\n\nlet messageText = '';\nif (messageType === 'text') {\n  messageText = (msg.text?.body || '').trim();\n} else {\n  const labels = { audio: 'áudio', image: 'imagem', video: 'vídeo', document: 'documento', sticker: 'figurinha' };\n  messageText = '[Lead enviou ' + (labels[messageType] || messageType) + ']';\n}\n\nif (!messageText) return [];\nreturn [{ json: { phoneNumber, pushName, conversationId, messageText, messageType } }];"
+        }
+      },
+      {
+        "id": "a4",
+        "name": "Limitar 1 Item",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          920,
+          300
+        ],
+        "parameters": {
+          "jsCode": "return [{ json: {} }];"
+        }
+      },
+      {
+        "id": "a5",
+        "name": "Montar Contexto",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1160,
+          300
+        ],
+        "parameters": {
+          "jsCode": "const data = $('Extrair Dados').first().json;\nconst { phoneNumber, pushName, conversationId, messageText } = data;\n\nconst oneDayAgo = new Date(Date.now() - 24 * 3600 * 1000).toISOString();\nconst rawSheets = $('Buscar Histórico').first().json;\nconst rows = rawSheets.values || [];\nconst headers = rows[0] || [];\nconst allRows = rows.slice(1).map(row => {\n  const obj = {};\n  headers.forEach((h, i) => { obj[h] = row[i] || ''; });\n  return { json: obj };\n});\n\nconst history = allRows\n  .filter(r => r.json.conversationId === conversationId || r.json.conversationId === 'scala_' + conversationId)\n  .filter(r => !r.json.timestamp || r.json.timestamp >= oneDayAgo)\n  .sort((a, b) => new Date(a.json.timestamp || 0) - new Date(b.json.timestamp || 0))\n  .slice(-20)\n  .map(r => ({ role: r.json.role, content: r.json.content }))\n  .filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim());\n\nconst lastUser = history.filter(m => m.role === 'user').slice(-1)[0];\nif (lastUser && lastUser.content === messageText) return [];\n\nconst isFirstMessage = history.length === 0;\n\nconst slots = [];\nconst d = new Date();\nd.setMinutes(0, 0, 0);\nd.setHours(d.getHours() + 2);\nfor (let i = 0; i < 300 && slots.length < 6; i++) {\n  const day = d.getDay(), hour = d.getHours();\n  if (day === 0) { d.setDate(d.getDate() + 1); d.setHours(9); continue; }\n  if (day === 6) { d.setDate(d.getDate() + 2); d.setHours(9); continue; }\n  if (hour < 9)  { d.setHours(9); continue; }\n  if (hour >= 17){ d.setDate(d.getDate() + 1); d.setHours(9); continue; }\n  const dn = ['dom','seg','ter','qua','qui','sex','sáb'][day];\n  slots.push(dn + ' ' + String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0') + ' às ' + String(hour).padStart(2,'0') + ':00');\n  d.setHours(hour + 2);\n}\nconst slotsText = slots.join('\\n');\n\nconst nome = pushName || '';\nconst nomeStr = nome ? nome : 'você';\n\nconst fromSite = isFirstMessage && /vim pelo site|diagn[oó]stico gratuito|quero agendar.*diagn[oó]s/i.test(messageText);\n\nlet greetingInstruction;\nif (isFirstMessage) {\n  if (fromSite) {\n    greetingInstruction = `PRIMEIRA MENSAGEM — Variante A (lead veio do site):\\nUse EXATAMENTE esta abertura:\\n\"Oi, ${nome || '[Nome]'}! 😊 Que bom te ver por aqui! Me chamo Ana, sou consultora da Scala. Vou te ajudar a preparar tudo para o diagnóstico com o Paulo ser 100% aproveitado pra você.\\nAntes de mais nada — me conta: qual é o seu negócio?\"`;\n  } else {\n    greetingInstruction = `PRIMEIRA MENSAGEM — Variante B (orgânico):\\nUse esta abertura:\\n\"Oi, ${nome || '[Nome]'}! Tudo bem? 😊 Me chamo Ana, sou consultora da Scala — a gente constrói ecossistemas de vendas automatizados com IA para empresas que querem crescer sem aumentar equipe.\\nMe conta: como você chegou até a gente?\"`;\n  }\n} else {\n  greetingInstruction = 'CONTINUAÇÃO: PROIBIDO usar \"Oi\", \"Olá\" ou nome no início da mensagem. Vá direto ao conteúdo.';\n}\n\nconst prompt = `Você é Ana, consultora da Scala Automate — empresa especializada em automação de marketing, atendimento e comercial com IA para empresas que querem crescer sem aumentar equipe.\\n\\nMISSÃO: conduzir o lead pelo fluxo de qualificação e agendar o diagnóstico gratuito de 30 min com Paulo Nunan.\\n\\n=== IDENTIDADE ===\\n- Humana, calorosa, direta e especialista\\n- NUNCA revele que é IA\\n- Máx 2 linhas por mensagem (exceto Passo 3 e Passo 5 que são mais longos)\\n- 1 pergunta por mensagem\\n- Tom consultivo, nunca de vendedor\\n- Não use estatísticas nas perguntas de qualificação — guarde para o Passo 5\\n\\n=== REGRA DE SAUDÇÃO ===\\n${greetingInstruction}\\n\\n=== FLUXO DE ATENDIMENTO (8 PASSOS) ===\\n\\nPASSO 1 — CONEXÃO INICIAL\\nJá descrito acima. Objetivo: criar rapport e descobrir o negócio do lead.\\n\\nPASSO 2 — IDENTIFICAÇÃO DA TRILHA\\nApós o lead falar sobre o negócio, pergunte:\\n\"Entendi! Pra nossa conversa ser o mais útil possível pra você, me diz: qual área do seu negócio você sente que está mais travada hoje?\\n\\n1️⃣ Atendimento — responder leads, qualificar, agendar\\n2️⃣ Marketing — campanhas, relatórios, gestão de tráfego\\n3️⃣ Comercial — follow-up, propostas, CRM\\n4️⃣ Outra área — me conta qual\"\\n\\nInterprete livremente: \"WhatsApp\", \"chatbot\", \"vendas\", \"tráfego\", \"leads\" etc. — mapeie para a trilha correta.\\n\\nPASSO 3 — RECONHECIMENTO DA DOR POR TRILHA\\nQuando o lead identificar a trilha, mostre as possibilidades da área dele:\\n\\nTRILHA A — Atendimento:\\n\"Atendimento é uma das áreas com mais demanda agora — faz total sentido.\\nUltimamente as empresas estão automatizando muito:\\n\\n📲 Resposta imediata no WhatsApp 24/7\\n🎯 Qualificação automática de leads antes do humano entrar\\n📅 Agendamento de reuniões sem precisar de SDR\\n🔄 Follow-up automático para leads que sumiram\\n\\nAlgum desses é o que você precisa? Se for outra coisa, sem problema — a gente conversa no diagnóstico mesmo 😊\"\\n\\nTRILHA B — Marketing:\\n\"Marketing quando bem automatizado muda completamente o jogo — e muita empresa ainda faz tudo na mão.\\nO que mais estamos implementando por aí:\\n\\n📊 Relatórios automáticos de campanhas direto no WhatsApp\\n🤖 Agente que cria e edita campanhas por comando de texto\\n🔍 Análise de performance personalizada com alertas\\n📋 Integração entre Meta Ads, Google Ads e CRM automaticamente\\n\\nAlgum desses é o que você precisa? Ou é outra coisa?\"\\n\\nTRILHA C — Comercial:\\n\"Comercial automatizado é o que separa quem escala de quem fica preso no operacional — faz muito sentido.\\nO que mais estamos construindo:\\n\\n📧 Follow-up automático por WhatsApp + email sem perder nenhum lead\\n📝 Propostas geradas automaticamente com dados do CRM\\n🏆 Classificação automática de leads por temperatura (quente/morno/frio)\\n📈 Dashboard de vendas atualizado em tempo real\\n\\nAlgum desses é o que você precisa?\"\\n\\nTRILHA D — Outra área:\\n\"Que interessante! Me conta mais — o que exatamente está travando nessa área? Quero entender direito antes de te dar qualquer direcionamento 😊\"\\n\\nPASSO 4 — APROFUNDAMENTO DA DOR (2 perguntas, UMA POR VEZ, mensagens separadas)\\n\\nTRILHA A:\\n  P1: \"${nomeStr}, me diz uma coisa — hoje quando um lead chega no seu WhatsApp fora do horário comercial, o que acontece com ele?\"\\n  P2: \"E em média, quanto tempo leva até alguém da sua equipe responder um lead novo?\"\\n\\nTRILHA B:\\n  P1: \"${nomeStr}, hoje você consegue saber, de cabeça, qual campanha trouxe mais leads qualificados no último mês?\"\\n  P2: \"E quando uma campanha começa a performar mal — você descobre por conta própria ou alguém te avisa?\"\\n\\nTRILHA C:\\n  P1: \"${nomeStr}, hoje quando um lead pede uma proposta, quanto tempo leva até ela chegar na mão dele?\"\\n  P2: \"E os leads que não fecharam na primeira conversa — tem algum processo de follow-up, ou acaba ficando pra depois?\"\\n\\nTRILHA D: faça 2 perguntas abertas relevantes ao que o lead descreveu, uma por vez.\\n\\nPASSO 5 — TRANSIÇÃO E RESUMO (Micro-Fechamento)\\nApós as 2 perguntas de aprofundamento, gere dinamicamente:\\n\"${nomeStr}, com o que você me contou já consigo ter uma visão bem clara do que está travando seu negócio.\\n[RESUMO PERSONALIZADO — 1 frase específica e cirúrgica baseada nas respostas do lead]\\nIsso é exatamente o tipo de coisa que a gente resolve — e no diagnóstico o Paulo vai te mostrar como ficaria isso funcionando no seu negócio especificamente.\\n\\nPosso te garantir: você vai sair da call com clareza total de qual é o próximo passo, independente de fechar ou não com a gente. 🎯\"\\n\\nPASSO 6 — AGENDAMENTO\\nLogo após o Passo 5:\\n\"Tenho agenda disponível para o Paulo te atender:\\n\\n📅 [slot1]\\n📅 [slot2]\\n\\nQual fica melhor pra você? (São 30 minutinhos, online, gratuito e sem compromisso — você decide depois se faz sentido pra você)\"\\n\\nIMPORTANTE: Não mencione Google Meet nesta mensagem.\\n\\nPASSO 7 — CONFIRMAÇÃO + MICRO-COMPROMISSO\\nQuando o lead confirmar um horário, use EXATAMENTE este formato:\\n\"Perfeito! ✅ Marcado para [dia DD/MM] às [HH:MM].\\n\\nAh, ${nomeStr} — salva meu contato aqui como \\\\\"Ana | Scala\\\\\" pra você não perder o lembrete 😊 Qualquer dúvida antes da call, pode me chamar aqui mesmo!\"\\n\\nATENÇÃO: O formato exato \"Marcado para DD/MM às HH:MM\" é OBRIGATÓRIO — o sistema usa isso para registrar o evento automaticamente.\\n\\n=== NEGOCIAÇÃO DE HORÁRIO ===\\nSe o lead não puder nos horários oferecidos:\\n1. \"Sem problema! Que dia dessa semana você teria uns 30 min? Tenho manhã e tarde disponíveis.\"\\n2. Quando indicar dia/período, ofereça 2 slots compatíveis das DISPONIBILIDADES abaixo\\n3. Continue até confirmar com: \"Perfeito! ✅ Marcado para [dia DD/MM] às [HH:MM].\"\\n\\n=== TRATAMENTO DE DESVIOS ===\\n\\nPREÇO: \"Os valores variam bastante dependendo do que a gente vai construir pra você — por isso o diagnóstico existe: pra te dar uma proposta real, não um número genérico. O diagnóstico é gratuito e sem compromisso. Você decide depois se faz sentido. 😊\"\\n→ Após resposta, volte ao agendamento (Passo 6).\\n\\nVAGO (\\\"quero automatizar tudo\\\"): \\\"Haha, entendo — quando a gente vê o potencial da automação, quer tudo de uma vez! 😄 Mas pra nossa reunião ser realmente útil pra você, me ajuda a focar: se você pudesse resolver uma coisa só no seu negócio hoje, qual seria?\\\"\\n\\nNÃO É DECISOR: \\\"Faz todo sentido! O diagnóstico pode ser feito com os dois juntos — na verdade é até melhor assim, porque as decisões ficam mais rápidas quando todo mundo está na mesma página. Você consegue confirmar com seu sócio e me dizer quando vocês dois têm disponibilidade?\\\"\\n\\nJÁ TEM SOLUÇÃO: \\\"Que ótimo que você já está no caminho certo! A maioria dos negócios que a gente atende também já usa alguma ferramenta — o que fazemos é conectar tudo num ecossistema que funciona junto, sem silos. Às vezes o problema não é a ferramenta, é como as peças estão conectadas. Vale 30 min pra ver se tem algo que pode melhorar?\\\"\\n\\nSILÊNCIO / INATIVIDADE: \\\"${nomeStr}, vi que você ficou com uma dúvida no ar — fica à vontade pra me contar, tô aqui! 😊 Se preferir, posso já te mandar os horários disponíveis pra você escolher quando for melhor.\\\"\\n\\n=== ESTATÍSTICAS (use APENAS no Passo 5 ou em objeções — nunca nas perguntas de qualificação) ===\\n- \\\"65% dos leads sem resposta em 5 min vão pro concorrente\\\" (Harvard Business Review)\\n- \\\"Automação de marketing gera +14,5% nas vendas B2B\\\" (Annuitas Group)\\n- \\\"Follow-up automatizado reduz custo por lead em até 60%\\\"\\n- \\\"80% dos leads qualificados não compram no 1º contato — nutrição é o que converte\\\"\\n- \\\"Negócios com atendimento automatizado convertem até 3x mais leads\\\"\\n- \\\"Empresas que respondem em menos de 1h têm 7x mais chance de qualificar\\\" (MIT)\\n\\nDISPONIBILIDADES (use estes horários nas ofertas e negociações):\\n${slotsText}\\n\\n${pushName ? 'Lead: ' + pushName : ''}`;\n\nconst messages = [\n  { role: 'system', content: prompt },\n  ...history,\n  { role: 'user', content: messageText }\n];\n\nreturn [{ json: { messages, phoneNumber, conversationId, pushName, messageText } }];"
+        }
+      },
+      {
+        "id": "a6",
+        "name": "GPT-4.1",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1400,
+          300
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.openai.com/v1/chat/completions",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "openAiApi",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ model: \"gpt-4.1\", messages: $json.messages, max_tokens: 350, temperature: 0.75 }) }}",
+          "options": {
+            "timeout": 30000
+          }
+        },
+        "credentials": {
+          "openAiApi": {
+            "id": "LFnyHUsH7lj5FEvQ",
+            "name": "scala-agent"
+          }
+        }
+      },
+      {
+        "id": "a7",
+        "name": "Preparar Resposta",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1640,
+          300
+        ],
+        "parameters": {
+          "jsCode": "const ctx = $('Montar Contexto').first().json;\nconst gpt = $input.first().json;\nconst aiResponse = (gpt.choices?.[0]?.message?.content || '').trim()\n  || 'Oi! Tive um probleminha aqui. Pode repetir sua mensagem?';\nreturn [{ json: { aiResponse, phoneNumber: ctx.phoneNumber, conversationId: ctx.conversationId, pushName: ctx.pushName, messageText: ctx.messageText } }];"
+        }
+      },
+      {
+        "id": "a8",
+        "name": "Enviar WhatsApp",
+        "type": "n8n-nodes-base.whatsApp",
+        "typeVersion": 1,
+        "position": [
+          1880,
+          300
+        ],
+        "parameters": {
+          "resource": "message",
+          "operation": "send",
+          "phoneNumberId": "971782562694033",
+          "recipientPhoneNumber": "={{ $json.phoneNumber }}",
+          "textBody": "={{ $json.aiResponse }}",
+          "additionalFields": {}
+        },
+        "credentials": {
+          "whatsAppApi": {
+            "id": "umUchtUGj2ZzikQ5",
+            "name": "WhatsApp account"
+          }
+        }
+      },
+      {
+        "id": "a9",
+        "name": "Preparar Linhas",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2120,
+          300
+        ],
+        "parameters": {
+          "jsCode": "const ctx = $('Preparar Resposta').first().json;\nconst ts = new Date().toISOString();\nconst userRow = [ctx.conversationId, 'user',      ctx.messageText, ctx.pushName || '', ts];\nconst aiRow   = [ctx.conversationId, 'assistant', ctx.aiResponse,  ctx.pushName || '', ts];\nreturn [{ json: { values: [userRow, aiRow] } }];"
+        }
+      },
+      {
+        "id": "a11",
+        "name": "Resposta Fallback",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1400,
+          520
+        ],
+        "parameters": {
+          "jsCode": "const ctx = $('Montar Contexto').first().json;\nreturn [{ json: { aiResponse: 'Oi! Tive um probleminha técnico. Pode repetir?', phoneNumber: ctx.phoneNumber, conversationId: ctx.conversationId, pushName: ctx.pushName, messageText: ctx.messageText } }];"
+        }
+      },
+      {
+        "id": "a12",
+        "name": "Aguardar",
+        "type": "n8n-nodes-base.wait",
+        "typeVersion": 1.1,
+        "position": [
+          1760,
+          300
+        ],
+        "parameters": {
+          "resume": "timeInterval",
+          "amount": 3,
+          "unit": "seconds"
+        }
+      },
+      {
+        "id": "a13",
+        "name": "Detectar Agendamento",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1640,
+          560
+        ],
+        "parameters": {
+          "jsCode": "const ctx = $('Preparar Resposta').first().json;\nconst { aiResponse, pushName, phoneNumber } = ctx;\n\nconst isBooking = /marcado para|agendado para/i.test(aiResponse);\nif (!isBooking) return [{ json: { ...ctx, isBooking: false } }];\n\nconst dateMatch = aiResponse.match(/(\\d{2})\\/(\\d{2})\\s+às\\s+(\\d{2}):(\\d{2})/);\nif (!dateMatch) return [{ json: { ...ctx, isBooking: false } }];\n\nconst [_, day, month, hour, minute] = dateMatch;\nconst year = new Date().getFullYear();\nconst pad = n => String(n).padStart(2, '0');\n\nconst startISO = `${year}-${pad(parseInt(month))}-${pad(parseInt(day))}T${pad(parseInt(hour))}:${pad(parseInt(minute))}:00`;\nconst totalEndMin = parseInt(minute) + 20;\nconst endHour = parseInt(hour) + Math.floor(totalEndMin / 60);\nconst endMin = totalEndMin % 60;\nconst endISO = `${year}-${pad(parseInt(month))}-${pad(parseInt(day))}T${pad(endHour)}:${pad(endMin)}:00`;\n\nreturn [{ json: {\n  ...ctx,\n  isBooking: true,\n  eventTitle: 'Diagnóstico Gratuito Scala — ' + (pushName || phoneNumber),\n  eventDesc: 'Lead: ' + (pushName || 'não identificado') + '\\nTelefone: ' + phoneNumber + '\\nAgendado via WhatsApp',\n  startISO,\n  endISO,\n  requestId: 'diag-' + Date.now()\n} }];"
+        }
+      },
+      {
+        "id": "a14",
+        "name": "IF Agendamento",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          1880,
+          560
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "chk1",
+                "leftValue": "={{ $json.isBooking }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true",
+                  "singleValue": true
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "a15",
+        "name": "Criar Evento Calendario",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          2120,
+          560
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=none",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "googleCalendarOAuth2Api",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ summary: $json.eventTitle, description: $json.eventDesc, start: { dateTime: $json.startISO + '-03:00', timeZone: 'America/Sao_Paulo' }, end: { dateTime: $json.endISO + '-03:00', timeZone: 'America/Sao_Paulo' }, conferenceData: { createRequest: { requestId: $json.requestId, conferenceSolutionKey: { type: 'hangoutsMeet' } } } }) }}",
+          "options": {}
+        },
+        "continueOnFail": true,
+        "credentials": {
+          "googleCalendarOAuth2Api": {
+            "id": "QGp1FxkKTfYhYYJ0",
+            "name": "Google Calendar - Paulo"
+          }
+        }
+      },
+      {
+        "id": "a16",
+        "name": "Montar Mensagem Final",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2360,
+          560
+        ],
+        "parameters": {
+          "jsCode": "const ctx = $('Detectar Agendamento').first().json;\nconst cal = $input.first().json;\n\nconst meetLink = cal?.conferenceData?.entryPoints?.[0]?.uri || null;\n\nlet aiResponse = ctx.aiResponse || '';\nif (meetLink) {\n  aiResponse = aiResponse\n    .replace(/O link do Google Meet vai direto aqui após confirmar\\.?/gi, '')\n    .replace(/Paulo vai [^\\n.]*Google Meet[^\\n.]*[.!]?/gi, '')\n    .replace(/Link do Google Meet:?\\s*\\n?https?:\\/\\/[^\\s]*/gi, '')\n    .trim();\n  aiResponse = aiResponse + '\\n🔗 ' + meetLink;\n}\n\nreturn [{ json: { ...ctx, aiResponse } }];"
+        }
+      },
+      {
+        "id": "a3",
+        "name": "Buscar Histórico",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          680,
+          300
+        ],
+        "parameters": {
+          "method": "GET",
+          "url": "https://sheets.googleapis.com/v4/spreadsheets/1yDex-TLsx3TCxQ2ZZObTn6X_4Ln83ClMEiZI47y6h5U/values/Conversas",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "googleSheetsOAuth2Api",
+          "options": {}
+        },
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "UeSaLFF10d9utrmA",
+            "name": "Google Sheets - Paulo"
+          }
+        }
+      },
+      {
+        "id": "a10",
+        "name": "Salvar Conversa",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          2360,
+          300
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://sheets.googleapis.com/v4/spreadsheets/1yDex-TLsx3TCxQ2ZZObTn6X_4Ln83ClMEiZI47y6h5U/values/Conversas:append?valueInputOption=USER_ENTERED",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "googleSheetsOAuth2Api",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ values: $json.values }) }}",
+          "options": {}
+        },
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "UeSaLFF10d9utrmA",
+            "name": "Google Sheets - Paulo"
+          }
+        }
+      }
+    ],
+    "connections": {
+      "Webhook WhatsApp": {
+        "main": [
+          [
+            {
+              "node": "Extrair Dados",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Limitar 1 Item": {
+        "main": [
+          [
+            {
+              "node": "Montar Contexto",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Montar Contexto": {
+        "main": [
+          [
+            {
+              "node": "GPT-4.1",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "GPT-4.1": {
+        "main": [
+          [
+            {
+              "node": "Preparar Resposta",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ],
+        "error": [
+          [
+            {
+              "node": "Resposta Fallback",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Preparar Resposta": {
+        "main": [
+          [
+            {
+              "node": "Detectar Agendamento",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Detectar Agendamento": {
+        "main": [
+          [
+            {
+              "node": "IF Agendamento",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "IF Agendamento": {
+        "main": [
+          [
+            {
+              "node": "Criar Evento Calendario",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Aguardar",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Criar Evento Calendario": {
+        "main": [
+          [
+            {
+              "node": "Montar Mensagem Final",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Montar Mensagem Final": {
+        "main": [
+          [
+            {
+              "node": "Aguardar",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Aguardar": {
+        "main": [
+          [
+            {
+              "node": "Enviar WhatsApp",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Enviar WhatsApp": {
+        "main": [
+          [
+            {
+              "node": "Preparar Linhas",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Resposta Fallback": {
+        "main": [
+          [
+            {
+              "node": "Aguardar",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Extrair Dados": {
+        "main": [
+          [
+            {
+              "node": "Buscar Histórico",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Buscar Histórico": {
+        "main": [
+          [
+            {
+              "node": "Limitar 1 Item",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Preparar Linhas": {
+        "main": [
+          [
+            {
+              "node": "Salvar Conversa",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "authors": "Paulo Nunan",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-03-26T04:09:50.686Z",
+        "id": 87,
+        "workflowId": "S22OxWxT77a1geK8",
+        "versionId": "6038af51-b85d-473c-ae7b-3938c75abbf1",
+        "event": "activated",
+        "userId": "cdef1802-d0c6-490f-add8-cd6f5c4b604d"
+      },
+      {
+        "createdAt": "2026-03-26T04:09:50.672Z",
+        "id": 86,
+        "workflowId": "S22OxWxT77a1geK8",
+        "versionId": "6038af51-b85d-473c-ae7b-3938c75abbf1",
+        "event": "deactivated",
+        "userId": "cdef1802-d0c6-490f-add8-cd6f5c4b604d"
+      }
+    ]
+  }
+}
