@@ -5,7 +5,7 @@
 > Use como contexto antes de qualquer decisão relevante. Se algo mudou, atualize aqui.
 
 **Última atualização:** 31 de março de 2026
-**Versão atual do site:** v2 (v3 em construção)
+**Versão atual do site:** v3 — Site de Autoridade ✅ (deploy READY 31/03/2026)
 **Versão atual da Ana:** SPIN v1.1 (workflow `mLM22h2JylSrhCRE`)
 
 ---
@@ -657,35 +657,35 @@ A v1 tinha "resultado médio dos clientes Scala após 30 dias" — o que seria f
 
 ---
 
-### V3 do Site — Site de Autoridade (planejado)
+### V3 do Site — Site de Autoridade — CONCLUÍDA ✅
 
-**Gatilho:** decisão tomada em 31 Mar 2026 com base no PDF estratégico
+**Entregue:** 31 Mar 2026 | Commit `343ba8b` | Deploy Vercel: READY
+**URL:** `https://portfolio-scala.vercel.app/`
 
-**O que muda:**
-- Site deixa de ser landing page de aquisição → vira portfólio de autoridade técnica
-- Visitante chegará pelo link enviado pela Ana nas fases 3 e 4 do SPIN (lead já qualificado)
-- Novo objetivo: confirmar decisão já tomada, não convencer do zero
-- CTA principal: "Confirmar meu diagnóstico gratuito →"
+**O que mudou:**
+- Site v2 (aquisição fria) → v3 (autoridade para leads quentes)
+- Visitante chega pelo link da Ana no SPIN fase 3 (lead já qualificado)
+- Objetivo: confirmar decisão já tomada, não convencer do zero
+- CTA: "Confirmar Diagnóstico Gratuito →" em todos os pontos de contato
+- WA message padronizada: `"...quero confirmar meu diagnóstico gratuito."`
 
-**8 novas seções** (substituem as 8 atuais):
+**8 seções entregues:**
 
-| # | Seção | Gatilho |
-|---|-------|---------|
-| 1 | Hero — Declaração de Posicionamento | Reconhecimento |
-| 2 | Ecossistema — 4 Módulos | Desejo de completude |
-| 3 | Como Funciona — 4 Etapas | Redução de risco |
-| 4 | Para Quem É — 3 Perfis | Identificação |
-| 5 | Portfólio — 4 Projetos Técnicos | Prova de competência |
-| 6 | Números de Mercado | Urgência competitiva |
-| 7 | Por Que a Scala | Diferenciação |
-| 8 | CTA Final | Escassez real |
+| # | Componente (arquivo) | ID | Conteúdo |
+|---|---------------------|-----|---------|
+| 1 | Hero | `#hero` | "Automação que vende. Enquanto você cresce." |
+| 2 | SocialProof → Ecossistema | `#ecossistema` | 4 módulos: Atendimento, Marketing, Comercial, Operações |
+| 3 | Problem → Como Funciona | `#como-funciona` | 4 etapas: Diagnóstico → Arquitetura → Implementação → Entrega |
+| 4 | FunnelComparison → Para Quem É | `#para-quem` | 3 perfis: Gestores, Prestadores, Empresas |
+| 5 | HowItWorks → Portfólio | `#portfolio` | 4 projetos reais: Ana, Bruno, Follow-up, H3imob |
+| 6 | Testimonials → Números de Mercado | `#numeros` | 6 stats: Harvard, MIT, Annuitas |
+| 7 | Founder → Por Que a Scala | `#sobre` | Diferenciação implementação vs SaaS |
+| 8 | Contact → CTA Final | `#diagnostico` | 1 vaga disponível, `portfolio_site_cta_click` |
 
-**Regras do novo site:**
-- Sem formulário, sem menu complexo, sem preços, sem depoimentos fabricados
-- Sticky header com botão "Confirmar diagnóstico" sempre visível
-- Evento GA4: `portfolio_site_cta_click` (separado de `wa_button_click`)
-- Mobile-first (70%+ dos leads acessam direto do WhatsApp)
-- URL: `/portfolio` ou domínio próprio (a Ana manda o link)
+**Tracking:**
+- `wa_button_click` mantido para GTM / Meta Pixel Lead
+- `portfolio_site_cta_click` adicionado no Contact e FloatingCTA
+- `data-section` attributes atualizados → Analytics.tsx coleta automaticamente
 
 ---
 
