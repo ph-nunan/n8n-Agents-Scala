@@ -1,10 +1,11 @@
-# System Prompt — Agente Ana (Scala) v2
+# System Prompt — Agente Ana (Scala) SPIN v1
 
-Versão legível do system prompt implementado no nó **Montar Contexto** do workflow.
-Após editar aqui, atualizar também o `jsCode` do nó no n8n.
+Versão legível do system prompt implementado no nó **Montar Prompt** (na5) do workflow.
+O prompt é gerado dinamicamente em JavaScript — este doc descreve a lógica e as fases.
 
-**Workflow ID:** `S22OxWxT77a1geK8`
-**Última atualização:** 2026-03-25 — Fluxo 8 passos SPIN Selling + Google Calendar + Meet link
+**Workflow ID:** `mLM22h2JylSrhCRE` (Nova Ana — Agente WhatsApp SPIN v1)
+**Workflow anterior (desativado):** `S22OxWxT77a1geK8`
+**Última atualização:** 2026-03-31 — Rebuild completo: Supabase + SPIN 5 fases + JSON output + guard pós-booking
 
 ---
 
@@ -179,6 +180,9 @@ Se o lead não puder nos horários oferecidos:
 
 ## Parâmetros do Modelo
 
-- `model`: gpt-4.1
-- `max_tokens`: 350
+- `model`: claude-sonnet-4-6
+- `max_tokens`: 1024
 - `temperature`: 0.75
+- API: Anthropic (`https://api.anthropic.com/v1/messages`)
+- Auth: `x-api-key: $env.ANTHROPIC_API_KEY` + `anthropic-version: 2023-06-01`
+- **Nota:** O system prompt é passado no campo `system` (nível raiz), não dentro do array `messages`

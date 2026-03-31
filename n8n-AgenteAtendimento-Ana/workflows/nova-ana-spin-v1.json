@@ -1,0 +1,2132 @@
+{
+  "updatedAt": "2026-03-31T21:23:54.575Z",
+  "createdAt": "2026-03-31T03:33:25.737Z",
+  "id": "mLM22h2JylSrhCRE",
+  "name": "Nova Ana — Agente WhatsApp SPIN v1",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "na1",
+      "name": "Webhook WhatsApp",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-ana",
+        "responseMode": "onReceived",
+        "responseCode": "200",
+        "options": {}
+      },
+      "webhookId": "185f843d-b428-4079-a3a8-8e8e77109ac1"
+    },
+    {
+      "id": "na2",
+      "name": "Extrair Dados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const trigger = $input.first().json;\nconst body = trigger.body || trigger;\nconst entry = body?.entry?.[0];\nconst change = entry?.changes?.[0];\nconst value = change?.value;\nconst msg = value?.messages?.[0];\n\nif (!msg || !msg.from) return [];\n\nconst phoneNumber = msg.from;\nconst pushName = (value?.contacts?.[0]?.profile?.name || '').split(' ')[0];\nconst conversationId = phoneNumber;\nconst messageType = msg.type;\n\nlet messageText = '';\nif (messageType === 'text') {\n  messageText = (msg.text?.body || '').trim();\n} else {\n  const labels = { audio: 'audio', image: 'imagem', video: 'video', document: 'documento', sticker: 'figurinha' };\n  messageText = '[Lead enviou ' + (labels[messageType] || messageType) + ']';\n}\n\nif (!messageText) return [];\nreturn [{ json: { phoneNumber, pushName, conversationId, messageText, messageType } }];"
+      }
+    },
+    {
+      "id": "na3",
+      "name": "Upsert Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://euqvaadojakgplotvzvt.supabase.co/rest/v1/leads",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ telefone: $json.phoneNumber, nome: $json.pushName, ultima_mensagem: new Date().toISOString() }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "na4",
+      "name": "Buscar Historico",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        300
+      ],
+      "alwaysOutputData": true,
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://euqvaadojakgplotvzvt.supabase.co/rest/v1/conversas?telefone=eq.' + $json.telefone + '&order=created_at.asc&limit=30' }}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer SUPABASE_SECRET_KEY"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "na5",
+      "name": "Montar Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const lead = $('Upsert Lead').first().json;\nconst extractDados = $('Extrair Dados').first().json;\nconst { phoneNumber, pushName, messageText } = extractDados;\n\nconst histItems = $input.all()\n  .map(item => item.json)\n  .filter(row => row.role && row.content);\n\nconst rawMessages = histItems\n  .slice(-40)\n  .map(row => ({ role: row.role, content: row.content }));\n\nconst messages = [];\nfor (const msg of rawMessages) {\n  if (messages.length === 0 || messages[messages.length - 1].role !== msg.role) {\n    messages.push(msg);\n  }\n}\nwhile (messages.length > 0 && messages[0].role !== 'user') messages.shift();\nmessages.push({ role: 'user', content: messageText });\n\nconst fase = lead.fase || 1;\nconst nome = lead.nome || pushName || 'Lead';\nconst negocio = lead.negocio || '';\nconst dor_principal = lead.dor_principal || '';\n\n// Normaliza trilha para capitalizado — evita bug de case sensitivity\nconst trilhaRaw = lead.trilha || '';\nconst trilhaMap = { atendimento: 'Atendimento', marketing: 'Marketing', comercial: 'Comercial', outra: 'Outra' };\nconst trilha = trilhaMap[trilhaRaw.toLowerCase()] || trilhaRaw;\n\nconst getDiasUteis = () => {\n  const semana = ['domingo','segunda','terca','quarta','quinta','sexta','sabado'];\n  const dias = [];\n  let d = new Date(Date.now() - 3*60*60*1000);\n  while (dias.length < 4) {\n    d = new Date(d.getTime() + 24*60*60*1000);\n    const dow = d.getDay();\n    if (dow !== 0 && dow !== 6) {\n      dias.push(semana[dow] + ', ' + String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0'));\n    }\n  }\n  return dias;\n};\nconst dias = getDiasUteis();\nconst slot1 = dias[0] + ' as 10h';\nconst slot2 = dias[1] + ' as 14h';\nconst slot3 = dias[2] + ' as 10h';\n\nconst socialProof = {\n  Atendimento: 'Uma clinica odontologica que atendemos perdia mais de 60% dos leads fora do horario comercial — depois do agente de IA, o tempo de resposta caiu pra 8 segundos e os agendamentos automaticos triplicaram em 3 semanas.',\n  Marketing: 'Uma agencia de performance reduziu 40% do custo por lead depois que automatizamos alertas de campanha — antes o gestor so descobria que um anuncio estava queimando budget depois de dias perdidos.',\n  Comercial: 'Uma empresa de SaaS aumentou o fechamento em 31% com follow-up automatizado — leads que sumiam voltavam a responder dentro de 48h sem nenhuma intervencao manual.',\n  Outra: 'Ja ajudamos empresas a eliminar entre 20 e 40 horas semanais de trabalho operacional — liberando o time pra focar no que realmente gera receita.'\n};\n\n// =====================\n// FASE 1 — RECEPCAO\n// =====================\nconst fase1 = `FASE 1 — RECEPCAO\nObjetivo: criar conexao genuina, apresentar valor da Scala e entender o negocio.\n\nTOM: calorosa, curiosa, humana. Reaja ao que o lead fala.\n\nSe menciona anuncio, site ou diagnostico:\n\"Oi, ${nome}! Que bom te ver aqui 😊 Sou a Ana, consultora da Scala Automate.\"\nEm seguida: \"A gente constroi ecossistemas de automacao com IA pra empresas crescerem sem aumentar equipe — desde atendimento no WhatsApp ate relatorios de campanha e CRM automatizado. Me conta: qual e o seu negocio?\"\n\nSe veio organico:\n\"Oi, ${nome}! Como voce chegou ate a gente?\"\nApos resposta: \"Que legal! A Scala constroi automacoes com IA pra empresas B2B — desde agentes de atendimento ate inteligencia comercial. E qual e o seu negocio?\"\n\nSe o lead perguntar \"o que voces fazem?\", \"como funciona?\" ou similar ANTES de identificar o negocio:\n\"A gente constroi, por exemplo:\n- Agentes de WhatsApp que qualificam leads e agendam reunioes automaticamente\n- Relatorios de Meta Ads e Google Ads entregues direto no WhatsApp\n- Automacao de follow-up, propostas e CRM\nTudo integrado e rodando 24/7, sem precisar aumentar equipe. Me conta: qual e o seu negocio?\"\n\nAo identificar negocio: salve dados.negocio e dados.origem. Avance fase_nova=2.`;\n\n// =====================\n// FASE 2 — SITUACAO\n// =====================\nconst fase2 = `FASE 2 — SITUACAO\nObjetivo: identificar a area mais travada.\n\nNao repita ou analise o negocio do lead — apenas reaja positivamente e pergunte:\n\"Entendi! Qual area do seu negocio voce sente mais travada hoje?\n\n1️⃣ Atendimento — responder leads, qualificar, agendar\n2️⃣ Marketing — campanhas, relatorios, gestao de trafego\n3️⃣ Comercial — follow-up, propostas, CRM\n4️⃣ Outra area — me conta qual\"\n\nInterprete livremente respostas informais: \"whatsapp\", \"leads\" = Atendimento; \"anuncios\", \"campanhas\", \"marketing\" = Marketing; \"vendas\", \"fechamento\" = Comercial.\nIMPORTANTE: salve dados.trilha com inicial MAIUSCULA: \"Atendimento\", \"Marketing\", \"Comercial\" ou \"Outra\".\nAvance fase_nova=3.`;\n\n// =====================\n// FASE 3 — SPIN COMPLETO\n// =====================\nlet p1, p2, impl1, needpayoff;\nif (trilha === 'Atendimento') {\n  p1 = 'Quando um lead chega no WhatsApp fora do horario — o que acontece com ele?';\n  p2 = 'E quanto tempo em media leva ate alguem da sua equipe responder um lead novo?';\n  impl1 = 'Ja calculou quanto voce perde por mes com leads que nao foram respondidos a tempo?';\n  needpayoff = 'Se voce tivesse um agente respondendo leads 24/7, qualificando e agendando automaticamente — o que isso mudaria no seu resultado?';\n} else if (trilha === 'Marketing') {\n  p1 = 'Voce sabe hoje, de cabeca, qual campanha trouxe mais leads qualificados no ultimo mes?';\n  p2 = 'Quando uma campanha comeca a perder performance — voce descobre sozinho ou so quando ja gastou demais?';\n  impl1 = 'Quanto voce estima que ja perdeu em campanhas que nao performaram antes de perceber?';\n  needpayoff = 'Se voce tivesse alertas em tempo real e relatorios automaticos no WhatsApp — como isso mudaria suas decisoes de investimento?';\n} else if (trilha === 'Comercial') {\n  p1 = 'Quando um lead pede proposta — quanto tempo leva ate ela chegar na mao dele?';\n  p2 = 'Os leads que nao fecharam na primeira conversa — tem algum processo de follow-up ou acaba ficando pra depois?';\n  impl1 = 'Voce tem ideia de quantos negocios ja escaparam por falta de follow-up no momento certo?';\n  needpayoff = 'Se cada lead recebesse follow-up automatico no timing perfeito — como isso impactaria seu fechamento?';\n} else {\n  p1 = 'Me conta mais sobre o que esta travando nessa area.';\n  p2 = 'Isso acontece com que frequencia — e qual e o impacto direto no seu resultado?';\n  impl1 = 'Se isso continuar assim por mais 6 meses, qual o custo real pro seu negocio?';\n  needpayoff = 'E se estivesse resolvido — o que muda concretamente pra voce?';\n}\n\nconst sp = socialProof[trilha] || socialProof.Outra;\n\nconst fase3 = `FASE 3 — QUALIFICACAO SPIN (4 perguntas, UMA POR VEZ)\nContexto: Negocio: \"${negocio}\" | Trilha: ${trilha||'identificar'}\n\nORDEM OBRIGATORIA — 1 pergunta por mensagem, aguarde resposta:\nP1 (Problema): \"${p1}\"\nP2 (Problema): \"${p2}\"\nP3 (Implicacao): \"${impl1}\"\nP4 (Need-payoff): \"${needpayoff}\"\n\nREGRAS DE TOM:\n- Valide a resposta ANTES de perguntar a proxima: \"Faz sentido...\", \"Isso e mais comum do que parece...\", \"Entendo bem...\"\n- NAO seja seco — reaja genuinamente ao que o lead compartilha\n- Verifique o historico: quantas perguntas ja foram feitas? Nao repita.\n\n== TRATAMENTO DE OBJECOES DURANTE QUALIFICACAO ==\nSe o lead expressar medo de parecer bot / falta de humanizacao:\n\"${nome}, essa e exatamente a diferenca do que a gente faz. Nao construimos chatbots genericos — construimos agentes com personalidade, contexto e capacidade de passar pro humano no momento certo. ${sp} O seu caso seria construido especificamente pra soar como voce, nao como um robo.\"\nDepois continue naturalmente para a proxima pergunta ou para o agendamento.\n\nSe o lead perguntar sobre preco ou resultados:\n\"Os valores dependem do que vamos construir juntos — por isso o diagnostico existe. Mas posso te dizer: ${sp}\"\nDepois continue o fluxo.\n\n== SOMENTE APOS AS 4 PERGUNTAS RESPONDIDAS: ==\nFaca TUDO em UMA UNICA mensagem:\n1. Social proof: \"${sp}\"\n2. Resumo cirurgico: \"${nome}, com o que voce me contou fica claro: [RESUMO — mencione o custo/impacto real que o proprio lead revelou, seja especifico].\"\n3. Conexao: \"Isso e exatamente o que a gente resolve — e no diagnostico o Paulo te mostra como ficaria no seu negocio especificamente.\"\n4. Garantia: \"Voce sai da call com clareza total do proximo passo, fechando ou nao.\"\n5. Portfolio (transicao natural): \\\"Enquanto isso, da uma olhada nos sistemas que ja montamos: https://portfolio-scala.vercel.app 👆\\\"\n6. Urgencia + slots:\n\"Tenho poucos horarios esta semana:\n${slot1}\n${slot2}\n${slot3}\nQual fica melhor? (30 min, online, gratuito e sem compromisso 😊)\"\n\nDefina fase_nova=5. Salve dados.dor_principal (1 frase com custo real) e dados.classificacao (Quente/Morno/Frio).`;\n\n// =====================\n// FASE 5 — AGENDAMENTO\n// =====================\nconst fase5 = `FASE 5 — AGENDAMENTO\nContexto: Negocio: \"${negocio}\" | Dor: \"${dor_principal}\"\n\nO lead esta pronto para confirmar.\n\nSlots disponiveis:\n${slot1}\n${slot2}\n${slot3}\n\nSe confirmar um slot: responda EXATAMENTE:\n\"Perfeito! ✅ Marcado para [DD/MM] as [HH:MM]. Salva meu contato como 'Ana | Scala' pra nao perder o lembrete 😊\"\n\nSe quiser outro horario: ofeca outros slots dos proximos dias uteis ate confirmar.\n\nSe o lead mandar qualquer outra mensagem apos a confirmacao (\"ok\", \"obrigado\", etc): responda apenas com uma mensagem curta e calorosa de encerramento. NAO crie novo agendamento.\n\nObjecoes de ultima hora:\n- Preco: \"Os valores variam conforme o que vamos construir — por isso a call existe. Gratuito e sem compromisso 😊\"\n- Nao tenho tempo: \"Sao so 30 min e voce sai com um plano claro. Vale muito pelo tempo investido.\"\n- Preciso pensar: \"Claro! O diagnostico em si ja vai te dar clareza pra decidir. Sem compromisso nenhum.\"\n\nIMPORTANTE: Use EXATAMENTE \"Marcado para DD/MM as HH:MM\" — o sistema usa esse padrao para criar o evento no Google Calendar.\nMantenha fase_nova=5.`;\n\nconst phaseArr = [null, fase1, fase2, fase3, fase3, fase5];\nconst phaseContent = phaseArr[Math.min(fase, 5)] || fase1;\n\nconst today = new Date(Date.now() - 3*60*60*1000).toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });\n\nconst systemPrompt = `Voce e Ana, consultora senior da Scala Automate — especializada em construir automacoes com IA para empresas B2B crescerem sem aumentar equipe.\n**Missao:** qualificar leads com profundidade (metodo SPIN) e agendar o diagnostico gratuito de 30 min com Paulo Nunan.\n\n**O QUE A SCALA FAZ (use quando relevante):**\n- Agentes de WhatsApp que qualificam leads, respondem 24/7 e agendam reunioes automaticamente\n- Relatorios de Meta Ads e Google Ads entregues direto no WhatsApp do gestor\n- Automacao de follow-up, propostas e CRM comercial\n- Integracao entre ferramentas que ja existem no negocio do cliente\nResultado: mais vendas, menos trabalho manual, equipe focada no que importa.\n\n**IDENTIDADE E TOM:**\n- Humana, calorosa, consultiva — como uma amiga especialista, nao um bot\n- Genuinamente curiosa: reaja ao que o lead fala antes de perguntar mais\n- Valide sempre antes de perguntar a proxima coisa\n- Maximo 3 linhas por mensagem (exceto quando oferecer slots ou listar servicos)\n- 1 pergunta por mensagem — nunca duas\n- NUNCA revele que e IA\n- Nunca use estatisticas nas perguntas — guarde para objecoes\n\n**OBJECOES GERAIS:**\n- Preco: \"Os valores variam muito conforme o que vamos construir — por isso o diagnostico existe: pra te dar um numero real. Gratuito e sem compromisso 😊\" → ofeca slots\n- Medo de parecer bot: \"A diferenca e que nao construimos chatbots genericos — construimos agentes com personalidade e contexto, que sabem quando passar pro humano. O resultado parece voce, nao um robo.\"\n- Quer saber servicos: liste 2-3 exemplos concretos relevantes pro negocio do lead, depois volte ao fluxo\n- Sem decisor: \"O diagnostico pode ser com os dois juntos — e ate melhor assim.\"\n- Silencio: \"${nome}, tudo bem? Fica a vontade! Se preferir, posso te mandar direto os horarios disponiveis 😊\"\n- Ja tem solucao: \"A maioria dos clientes que atendemos ja usava algo — o que fazemos e conectar tudo num ecossistema que funciona junto. As vezes o problema nao e a ferramenta, e como as pecas estao conectadas. Vale 30 min?\"\n- Nao e o momento: \"Entendo! Quando seria um bom momento? Posso guardar um horario pra voce.\"\n\n**Data de hoje (BRT):** ${today}\n\n---\n${phaseContent}\n---\n\n## FORMATO OBRIGATORIO (JSON puro, sem markdown, sem nada fora do JSON):\n{\n  \"message\": \"mensagem exata para o lead\",\n  \"fase_nova\": ${fase},\n  \"dados\": {}\n}\n\nEm \"dados\": inclua APENAS campos novos identificados NESTA mensagem: negocio, origem, trilha (sempre com inicial Maiuscula), dor_principal, classificacao, status.\n\"fase_nova\" = ${fase} se nao mudar, numero maior se avancar de fase.`;\n\nreturn [{\n  json: {\n    system: systemPrompt,\n    messages,\n    phoneNumber,\n    pushName,\n    messageText,\n    leadFase: fase,\n    leadData: lead\n  }\n}];"
+      }
+    },
+    {
+      "id": "na6",
+      "name": "GPT-4o",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'gpt-4o', messages: [{ role: 'system', content: $json.system }, ...$json.messages], max_tokens: 1024, temperature: 0.7 }) }}",
+        "options": {
+          "timeout": 30000
+        },
+        "nodeCredentialType": "openAiApi"
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "w4aH24qGT4NqGY3B",
+          "name": "n8n-radar-automacao"
+        }
+      }
+    },
+    {
+      "id": "na7",
+      "name": "Parsear Resposta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst ctx = $('Montar Prompt').first().json;\nconst rawText = (response.choices?.[0]?.message?.content || '').trim();\n\nlet parsed = { message: '', fase_nova: ctx.leadFase, dados: {} };\ntry {\n  const jsonMatch = rawText.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    parsed = JSON.parse(jsonMatch[0]);\n  }\n} catch(e) {\n  parsed.message = rawText || 'Oi! Tive um probleminha aqui. Pode repetir sua mensagem?';\n}\n\nconst aiMessage = parsed.message || rawText || 'Oi! Tive um probleminha aqui. Pode repetir sua mensagem?';\nconst fase_nova = parsed.fase_nova || ctx.leadFase || 1;\nconst dados = parsed.dados || {};\n\n// Detecta booking APENAS na mensagem atual do lead, nunca no historico\n// E bloqueia se o lead ja esta com status Agendado\nconst leadJaAgendado = ctx.leadData?.status === 'Agendado';\nconst bookingMatch = !leadJaAgendado && aiMessage.match(/marcado para (\\d{1,2})\\/(\\d{1,2}) [a\\u00e0]s (\\d{1,2}):(\\d{2})/i);\nconst isBooking = !!bookingMatch;\n\nlet startISO = null;\nlet endISO = null;\nif (isBooking && bookingMatch) {\n  const [, day, month, hour, minute] = bookingMatch;\n  const year = new Date().getFullYear();\n  const h = parseInt(hour);\n  const m = parseInt(minute);\n  const endH = h + Math.floor((m + 30) / 60);\n  const endM = (m + 30) % 60;\n  startISO = year + '-' + month.padStart(2,'0') + '-' + day.padStart(2,'0') + 'T' + String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':00-03:00';\n  endISO = year + '-' + month.padStart(2,'0') + '-' + day.padStart(2,'0') + 'T' + String(endH).padStart(2,'0') + ':' + String(endM).padStart(2,'0') + ':00-03:00';\n}\n\nreturn [{\n  json: {\n    phoneNumber: ctx.phoneNumber,\n    pushName: ctx.pushName,\n    messageText: ctx.messageText,\n    leadFase: ctx.leadFase,\n    leadData: ctx.leadData,\n    aiMessage,\n    fase_nova,\n    dados,\n    isBooking,\n    startISO,\n    endISO,\n    requestId: 'nova-ana-' + Date.now()\n  }\n}];"
+      }
+    },
+    {
+      "id": "na8",
+      "name": "Preparar Update Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $input.first().json;\nconst dados = ctx.dados || {};\nconst fase_nova = ctx.fase_nova || ctx.leadFase || 1;\n\nconst updateBody = {\n  fase: fase_nova,\n  ultima_mensagem: new Date().toISOString()\n};\n\nObject.entries(dados).forEach(([k, v]) => {\n  if (v !== null && v !== undefined && v !== '') {\n    updateBody[k] = v;\n  }\n});\n\nreturn [{ json: { ...ctx, updateBody } }];"
+      }
+    },
+    {
+      "id": "na9",
+      "name": "Atualizar Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1920,
+        300
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://euqvaadojakgplotvzvt.supabase.co/rest/v1/leads?telefone=eq.' + $json.phoneNumber }}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.updateBody) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "na10",
+      "name": "IF Agendamento",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "chk1",
+              "leftValue": "={{ $node['Preparar Update Lead'].json.isBooking }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "na11",
+      "name": "Aguardar 3s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2400,
+        520
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 3,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "na12",
+      "name": "Enviar WA",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [
+        2640,
+        520
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "phoneNumberId": "971782562694033",
+        "recipientPhoneNumber": "={{ $node['Parsear Resposta'].json.phoneNumber }}",
+        "textBody": "={{ $node['Parsear Resposta'].json.aiMessage }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "whatsAppApi": {
+          "id": "umUchtUGj2ZzikQ5",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "id": "na13",
+      "name": "Salvar Conversa",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2880,
+        520
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://euqvaadojakgplotvzvt.supabase.co/rest/v1/conversas",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify([ { telefone: $node['Parsear Resposta'].json.phoneNumber, role: 'user', content: $node['Parsear Resposta'].json.messageText, fase: $node['Parsear Resposta'].json.leadFase }, { telefone: $node['Parsear Resposta'].json.phoneNumber, role: 'assistant', content: $node['Parsear Resposta'].json.aiMessage, fase: $node['Parsear Resposta'].json.fase_nova } ]) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "na14",
+      "name": "Criar Evento Calendario",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=none",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ summary: 'Diagnostico Scala - ' + $node['Parsear Resposta'].json.pushName, description: 'Diagnostico gratuito de 30 min com Paulo Nunan da Scala Automate', start: { dateTime: $node['Parsear Resposta'].json.startISO, timeZone: 'America/Sao_Paulo' }, end: { dateTime: $node['Parsear Resposta'].json.endISO, timeZone: 'America/Sao_Paulo' }, conferenceData: { createRequest: { requestId: $node['Parsear Resposta'].json.requestId, conferenceSolutionKey: { type: 'hangoutsMeet' } } } }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "QGp1FxkKTfYhYYJ0",
+          "name": "Google Calendar - Paulo"
+        }
+      }
+    },
+    {
+      "id": "na15",
+      "name": "Preparar Confirmacao",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        80
+      ],
+      "parameters": {
+        "jsCode": "const calendar = $input.first().json;\nconst ctx = $('Parsear Resposta').first().json;\n\nconst meetLink = calendar.conferenceData?.entryPoints?.[0]?.uri || '';\nconst eventId = calendar.id || '';\n\nconst baseMessage = ctx.aiMessage || '';\nconst aiMessage = meetLink\n  ? baseMessage + '\\n\\nLink da reuniao: ' + meetLink\n  : baseMessage;\n\nreturn [{\n  json: {\n    phoneNumber: ctx.phoneNumber,\n    pushName: ctx.pushName,\n    aiMessage,\n    messageText: ctx.messageText,\n    leadFase: ctx.leadFase,\n    fase_nova: ctx.fase_nova,\n    startISO: ctx.startISO,\n    endISO: ctx.endISO,\n    meetLink,\n    eventId\n  }\n}];"
+      }
+    },
+    {
+      "id": "na16",
+      "name": "Salvar Agendamento",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2880,
+        80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://euqvaadojakgplotvzvt.supabase.co/rest/v1/agendamentos",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ telefone: $json.phoneNumber, nome: $json.pushName, start_iso: $json.startISO, end_iso: $json.endISO, meet_link: $json.meetLink, status: 'agendado' }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "na17",
+      "name": "Atualizar Lead Agendado",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3120,
+        80
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://euqvaadojakgplotvzvt.supabase.co/rest/v1/leads?telefone=eq.' + $node['Preparar Confirmacao'].json.phoneNumber }}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'Agendado', data_agendamento: $node['Preparar Confirmacao'].json.startISO, link_meet: $node['Preparar Confirmacao'].json.meetLink, fase: 5 }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "na18",
+      "name": "Aguardar 3s Booking",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3360,
+        80
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 3,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "na19",
+      "name": "Enviar WA Confirmacao",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [
+        3600,
+        80
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "phoneNumberId": "971782562694033",
+        "recipientPhoneNumber": "={{ $node['Preparar Confirmacao'].json.phoneNumber }}",
+        "textBody": "={{ $node['Preparar Confirmacao'].json.aiMessage }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "whatsAppApi": {
+          "id": "umUchtUGj2ZzikQ5",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "id": "na20",
+      "name": "Notificar Paulo",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [
+        3840,
+        80
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "phoneNumberId": "971782562694033",
+        "recipientPhoneNumber": "5561981292879",
+        "textBody": "={{ 'Novo agendamento!\\n\\nNome: ' + $node['Preparar Confirmacao'].json.pushName + '\\nWhatsApp: ' + $node['Preparar Confirmacao'].json.phoneNumber + '\\nHorario: ' + ($node['Preparar Confirmacao'].json.startISO || '').substring(0,16).replace('T', ' as ') + '\\nMeet: ' + ($node['Preparar Confirmacao'].json.meetLink || '(sem link)') }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "whatsAppApi": {
+          "id": "umUchtUGj2ZzikQ5",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "id": "na21",
+      "name": "Salvar Conversa Booking",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4080,
+        80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://euqvaadojakgplotvzvt.supabase.co/rest/v1/conversas",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify([ { telefone: $node['Preparar Confirmacao'].json.phoneNumber, role: 'user', content: $node['Preparar Confirmacao'].json.messageText, fase: $node['Preparar Confirmacao'].json.leadFase }, { telefone: $node['Preparar Confirmacao'].json.phoneNumber, role: 'assistant', content: $node['Preparar Confirmacao'].json.aiMessage, fase: $node['Preparar Confirmacao'].json.fase_nova } ]) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "na22",
+      "name": "Resposta Fallback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        520
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Montar Prompt').first().json;\nreturn [{\n  json: {\n    phoneNumber: ctx.phoneNumber || '',\n    pushName: ctx.pushName || '',\n    aiMessage: 'Oi! Tive um probleminha aqui. Pode repetir sua mensagem?',\n    messageText: ctx.messageText || '',\n    leadFase: ctx.leadFase || 1,\n    fase_nova: ctx.leadFase || 1\n  }\n}];"
+      }
+    },
+    {
+      "id": "na23",
+      "name": "Aguardar 3s Fallback",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1440,
+        520
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 3,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "na24",
+      "name": "Enviar WA Fallback",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [
+        1680,
+        520
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "phoneNumberId": "971782562694033",
+        "recipientPhoneNumber": "={{ $json.phoneNumber }}",
+        "textBody": "={{ $json.aiMessage }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "whatsAppApi": {
+          "id": "umUchtUGj2ZzikQ5",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "id": "na25",
+      "name": "IF Pos Agendado",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        620,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "chk_agendado",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "Agendado",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "na26",
+      "name": "Resp Pos Agendado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        860,
+        580
+      ],
+      "parameters": {
+        "jsCode": "const lead = $('Upsert Lead').first().json;\nconst { phoneNumber, pushName, messageText } = $('Extrair Dados').first().json;\nconst nome = lead.nome || pushName || 'Lead';\n\nlet dataFormatada = '';\nlet linkMeet = lead.link_meet || '';\n\nif (lead.data_agendamento) {\n  const d = new Date(lead.data_agendamento);\n  const brtMs = d.getTime() - 3 * 60 * 60 * 1000;\n  const brt = new Date(brtMs);\n  const dia = String(brt.getUTCDate()).padStart(2,'0');\n  const mes = String(brt.getUTCMonth()+1).padStart(2,'0');\n  const hora = String(brt.getUTCHours()).padStart(2,'0') + ':' + String(brt.getUTCMinutes()).padStart(2,'0');\n  dataFormatada = dia + '/' + mes + ' as ' + hora;\n}\n\nlet response;\nif (dataFormatada && linkMeet) {\n  response = 'Boa, ' + nome + '! Tudo confirmado para ' + dataFormatada + '. 😊\\n\\nLink da reuniao: ' + linkMeet + '\\n\\nQualquer duvida ate la, e so chamar aqui! Ate mais 👋';\n} else {\n  response = 'Boa, ' + nome + '! 😊 Tudo confirmado. Qualquer duvida ate a reuniao, pode chamar aqui! 👋';\n}\n\nreturn [{ json: { phoneNumber, pushName, messageText, aiMessage: response } }];"
+      }
+    },
+    {
+      "id": "na27",
+      "name": "Aguardar 3s Pos",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        580
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 3,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "na28",
+      "name": "Enviar WA Pos",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        580
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "phoneNumberId": "971782562694033",
+        "recipientPhoneNumber": "={{ $node['Resp Pos Agendado'].json.phoneNumber }}",
+        "textBody": "={{ $node['Resp Pos Agendado'].json.aiMessage }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "whatsAppApi": {
+          "id": "umUchtUGj2ZzikQ5",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "id": "na29",
+      "name": "Salvar Conversa Pos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1580,
+        580
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://euqvaadojakgplotvzvt.supabase.co/rest/v1/conversas",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify([ { telefone: $node['Resp Pos Agendado'].json.phoneNumber, role: 'user', content: $node['Resp Pos Agendado'].json.messageText, fase: 5 }, { telefone: $node['Resp Pos Agendado'].json.phoneNumber, role: 'assistant', content: $node['Resp Pos Agendado'].json.aiMessage, fase: 5 } ]) }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Extrair Dados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extrair Dados": {
+      "main": [
+        [
+          {
+            "node": "Upsert Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Lead": {
+      "main": [
+        [
+          {
+            "node": "IF Pos Agendado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Historico": {
+      "main": [
+        [
+          {
+            "node": "Montar Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar Prompt": {
+      "main": [
+        [
+          {
+            "node": "GPT-4o",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GPT-4o": {
+      "main": [
+        [
+          {
+            "node": "Parsear Resposta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Resposta Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsear Resposta": {
+      "main": [
+        [
+          {
+            "node": "Preparar Update Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Update Lead": {
+      "main": [
+        [
+          {
+            "node": "Atualizar Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Atualizar Lead": {
+      "main": [
+        [
+          {
+            "node": "IF Agendamento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Agendamento": {
+      "main": [
+        [
+          {
+            "node": "Criar Evento Calendario",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aguardar 3s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aguardar 3s": {
+      "main": [
+        [
+          {
+            "node": "Enviar WA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar WA": {
+      "main": [
+        [
+          {
+            "node": "Salvar Conversa",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar Evento Calendario": {
+      "main": [
+        [
+          {
+            "node": "Preparar Confirmacao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Confirmacao": {
+      "main": [
+        [
+          {
+            "node": "Salvar Agendamento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salvar Agendamento": {
+      "main": [
+        [
+          {
+            "node": "Atualizar Lead Agendado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Atualizar Lead Agendado": {
+      "main": [
+        [
+          {
+            "node": "Aguardar 3s Booking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aguardar 3s Booking": {
+      "main": [
+        [
+          {
+            "node": "Enviar WA Confirmacao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar WA Confirmacao": {
+      "main": [
+        [
+          {
+            "node": "Notificar Paulo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notificar Paulo": {
+      "main": [
+        [
+          {
+            "node": "Salvar Conversa Booking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resposta Fallback": {
+      "main": [
+        [
+          {
+            "node": "Aguardar 3s Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aguardar 3s Fallback": {
+      "main": [
+        [
+          {
+            "node": "Enviar WA Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Pos Agendado": {
+      "main": [
+        [
+          {
+            "node": "Resp Pos Agendado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Buscar Historico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resp Pos Agendado": {
+      "main": [
+        [
+          {
+            "node": "Aguardar 3s Pos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aguardar 3s Pos": {
+      "main": [
+        [
+          {
+            "node": "Enviar WA Pos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar WA Pos": {
+      "main": [
+        [
+          {
+            "node": "Salvar Conversa Pos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": null,
+  "versionId": "a4380164-c9a8-46a3-816b-f1398ae3eea6",
+  "activeVersionId": "a4380164-c9a8-46a3-816b-f1398ae3eea6",
+  "versionCounter": 38,
+  "triggerCount": 1,
+  "shared": [
+    {
+      "updatedAt": "2026-03-31T03:33:25.775Z",
+      "createdAt": "2026-03-31T03:33:25.775Z",
+      "role": "workflow:owner",
+      "workflowId": "mLM22h2JylSrhCRE",
+      "projectId": "4fhKBbB4lEBuxqVT",
+      "project": {
+        "updatedAt": "2026-03-09T14:37:49.815Z",
+        "createdAt": "2026-03-09T14:14:16.132Z",
+        "id": "4fhKBbB4lEBuxqVT",
+        "name": "Paulo Nunan <ph.nunan@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "cdef1802-d0c6-490f-add8-cd6f5c4b604d"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-03-31T21:23:54.588Z",
+    "createdAt": "2026-03-31T21:23:54.588Z",
+    "versionId": "a4380164-c9a8-46a3-816b-f1398ae3eea6",
+    "workflowId": "mLM22h2JylSrhCRE",
+    "nodes": [
+      {
+        "id": "na1",
+        "name": "Webhook WhatsApp",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          300
+        ],
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "whatsapp-ana",
+          "responseMode": "onReceived",
+          "responseCode": "200",
+          "options": {}
+        },
+        "webhookId": "185f843d-b428-4079-a3a8-8e8e77109ac1"
+      },
+      {
+        "id": "na2",
+        "name": "Extrair Dados",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          240,
+          300
+        ],
+        "parameters": {
+          "jsCode": "const trigger = $input.first().json;\nconst body = trigger.body || trigger;\nconst entry = body?.entry?.[0];\nconst change = entry?.changes?.[0];\nconst value = change?.value;\nconst msg = value?.messages?.[0];\n\nif (!msg || !msg.from) return [];\n\nconst phoneNumber = msg.from;\nconst pushName = (value?.contacts?.[0]?.profile?.name || '').split(' ')[0];\nconst conversationId = phoneNumber;\nconst messageType = msg.type;\n\nlet messageText = '';\nif (messageType === 'text') {\n  messageText = (msg.text?.body || '').trim();\n} else {\n  const labels = { audio: 'audio', image: 'imagem', video: 'video', document: 'documento', sticker: 'figurinha' };\n  messageText = '[Lead enviou ' + (labels[messageType] || messageType) + ']';\n}\n\nif (!messageText) return [];\nreturn [{ json: { phoneNumber, pushName, conversationId, messageText, messageType } }];"
+        }
+      },
+      {
+        "id": "na3",
+        "name": "Upsert Lead",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          480,
+          300
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://euqvaadojakgplotvzvt.supabase.co/rest/v1/leads",
+          "authentication": "none",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "apikey",
+                "value": "SUPABASE_SECRET_KEY"
+              },
+              {
+                "name": "Authorization",
+                "value": "Bearer SUPABASE_SECRET_KEY"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Prefer",
+                "value": "resolution=merge-duplicates,return=representation"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ telefone: $json.phoneNumber, nome: $json.pushName, ultima_mensagem: new Date().toISOString() }) }}",
+          "options": {}
+        }
+      },
+      {
+        "id": "na4",
+        "name": "Buscar Historico",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          720,
+          300
+        ],
+        "alwaysOutputData": true,
+        "parameters": {
+          "method": "GET",
+          "url": "={{ 'https://euqvaadojakgplotvzvt.supabase.co/rest/v1/conversas?telefone=eq.' + $json.telefone + '&order=created_at.asc&limit=30' }}",
+          "authentication": "none",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "apikey",
+                "value": "SUPABASE_SECRET_KEY"
+              },
+              {
+                "name": "Authorization",
+                "value": "Bearer SUPABASE_SECRET_KEY"
+              }
+            ]
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "na5",
+        "name": "Montar Prompt",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          960,
+          300
+        ],
+        "parameters": {
+          "jsCode": "const lead = $('Upsert Lead').first().json;\nconst extractDados = $('Extrair Dados').first().json;\nconst { phoneNumber, pushName, messageText } = extractDados;\n\nconst histItems = $input.all()\n  .map(item => item.json)\n  .filter(row => row.role && row.content);\n\nconst rawMessages = histItems\n  .slice(-40)\n  .map(row => ({ role: row.role, content: row.content }));\n\nconst messages = [];\nfor (const msg of rawMessages) {\n  if (messages.length === 0 || messages[messages.length - 1].role !== msg.role) {\n    messages.push(msg);\n  }\n}\nwhile (messages.length > 0 && messages[0].role !== 'user') messages.shift();\nmessages.push({ role: 'user', content: messageText });\n\nconst fase = lead.fase || 1;\nconst nome = lead.nome || pushName || 'Lead';\nconst negocio = lead.negocio || '';\nconst dor_principal = lead.dor_principal || '';\n\n// Normaliza trilha para capitalizado — evita bug de case sensitivity\nconst trilhaRaw = lead.trilha || '';\nconst trilhaMap = { atendimento: 'Atendimento', marketing: 'Marketing', comercial: 'Comercial', outra: 'Outra' };\nconst trilha = trilhaMap[trilhaRaw.toLowerCase()] || trilhaRaw;\n\nconst getDiasUteis = () => {\n  const semana = ['domingo','segunda','terca','quarta','quinta','sexta','sabado'];\n  const dias = [];\n  let d = new Date(Date.now() - 3*60*60*1000);\n  while (dias.length < 4) {\n    d = new Date(d.getTime() + 24*60*60*1000);\n    const dow = d.getDay();\n    if (dow !== 0 && dow !== 6) {\n      dias.push(semana[dow] + ', ' + String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0'));\n    }\n  }\n  return dias;\n};\nconst dias = getDiasUteis();\nconst slot1 = dias[0] + ' as 10h';\nconst slot2 = dias[1] + ' as 14h';\nconst slot3 = dias[2] + ' as 10h';\n\nconst socialProof = {\n  Atendimento: 'Uma clinica odontologica que atendemos perdia mais de 60% dos leads fora do horario comercial — depois do agente de IA, o tempo de resposta caiu pra 8 segundos e os agendamentos automaticos triplicaram em 3 semanas.',\n  Marketing: 'Uma agencia de performance reduziu 40% do custo por lead depois que automatizamos alertas de campanha — antes o gestor so descobria que um anuncio estava queimando budget depois de dias perdidos.',\n  Comercial: 'Uma empresa de SaaS aumentou o fechamento em 31% com follow-up automatizado — leads que sumiam voltavam a responder dentro de 48h sem nenhuma intervencao manual.',\n  Outra: 'Ja ajudamos empresas a eliminar entre 20 e 40 horas semanais de trabalho operacional — liberando o time pra focar no que realmente gera receita.'\n};\n\n// =====================\n// FASE 1 — RECEPCAO\n// =====================\nconst fase1 = `FASE 1 — RECEPCAO\nObjetivo: criar conexao genuina, apresentar valor da Scala e entender o negocio.\n\nTOM: calorosa, curiosa, humana. Reaja ao que o lead fala.\n\nSe menciona anuncio, site ou diagnostico:\n\"Oi, ${nome}! Que bom te ver aqui 😊 Sou a Ana, consultora da Scala Automate.\"\nEm seguida: \"A gente constroi ecossistemas de automacao com IA pra empresas crescerem sem aumentar equipe — desde atendimento no WhatsApp ate relatorios de campanha e CRM automatizado. Me conta: qual e o seu negocio?\"\n\nSe veio organico:\n\"Oi, ${nome}! Como voce chegou ate a gente?\"\nApos resposta: \"Que legal! A Scala constroi automacoes com IA pra empresas B2B — desde agentes de atendimento ate inteligencia comercial. E qual e o seu negocio?\"\n\nSe o lead perguntar \"o que voces fazem?\", \"como funciona?\" ou similar ANTES de identificar o negocio:\n\"A gente constroi, por exemplo:\n- Agentes de WhatsApp que qualificam leads e agendam reunioes automaticamente\n- Relatorios de Meta Ads e Google Ads entregues direto no WhatsApp\n- Automacao de follow-up, propostas e CRM\nTudo integrado e rodando 24/7, sem precisar aumentar equipe. Me conta: qual e o seu negocio?\"\n\nAo identificar negocio: salve dados.negocio e dados.origem. Avance fase_nova=2.`;\n\n// =====================\n// FASE 2 — SITUACAO\n// =====================\nconst fase2 = `FASE 2 — SITUACAO\nObjetivo: identificar a area mais travada.\n\nNao repita ou analise o negocio do lead — apenas reaja positivamente e pergunte:\n\"Entendi! Qual area do seu negocio voce sente mais travada hoje?\n\n1️⃣ Atendimento — responder leads, qualificar, agendar\n2️⃣ Marketing — campanhas, relatorios, gestao de trafego\n3️⃣ Comercial — follow-up, propostas, CRM\n4️⃣ Outra area — me conta qual\"\n\nInterprete livremente respostas informais: \"whatsapp\", \"leads\" = Atendimento; \"anuncios\", \"campanhas\", \"marketing\" = Marketing; \"vendas\", \"fechamento\" = Comercial.\nIMPORTANTE: salve dados.trilha com inicial MAIUSCULA: \"Atendimento\", \"Marketing\", \"Comercial\" ou \"Outra\".\nAvance fase_nova=3.`;\n\n// =====================\n// FASE 3 — SPIN COMPLETO\n// =====================\nlet p1, p2, impl1, needpayoff;\nif (trilha === 'Atendimento') {\n  p1 = 'Quando um lead chega no WhatsApp fora do horario — o que acontece com ele?';\n  p2 = 'E quanto tempo em media leva ate alguem da sua equipe responder um lead novo?';\n  impl1 = 'Ja calculou quanto voce perde por mes com leads que nao foram respondidos a tempo?';\n  needpayoff = 'Se voce tivesse um agente respondendo leads 24/7, qualificando e agendando automaticamente — o que isso mudaria no seu resultado?';\n} else if (trilha === 'Marketing') {\n  p1 = 'Voce sabe hoje, de cabeca, qual campanha trouxe mais leads qualificados no ultimo mes?';\n  p2 = 'Quando uma campanha comeca a perder performance — voce descobre sozinho ou so quando ja gastou demais?';\n  impl1 = 'Quanto voce estima que ja perdeu em campanhas que nao performaram antes de perceber?';\n  needpayoff = 'Se voce tivesse alertas em tempo real e relatorios automaticos no WhatsApp — como isso mudaria suas decisoes de investimento?';\n} else if (trilha === 'Comercial') {\n  p1 = 'Quando um lead pede proposta — quanto tempo leva ate ela chegar na mao dele?';\n  p2 = 'Os leads que nao fecharam na primeira conversa — tem algum processo de follow-up ou acaba ficando pra depois?';\n  impl1 = 'Voce tem ideia de quantos negocios ja escaparam por falta de follow-up no momento certo?';\n  needpayoff = 'Se cada lead recebesse follow-up automatico no timing perfeito — como isso impactaria seu fechamento?';\n} else {\n  p1 = 'Me conta mais sobre o que esta travando nessa area.';\n  p2 = 'Isso acontece com que frequencia — e qual e o impacto direto no seu resultado?';\n  impl1 = 'Se isso continuar assim por mais 6 meses, qual o custo real pro seu negocio?';\n  needpayoff = 'E se estivesse resolvido — o que muda concretamente pra voce?';\n}\n\nconst sp = socialProof[trilha] || socialProof.Outra;\n\nconst fase3 = `FASE 3 — QUALIFICACAO SPIN (4 perguntas, UMA POR VEZ)\nContexto: Negocio: \"${negocio}\" | Trilha: ${trilha||'identificar'}\n\nORDEM OBRIGATORIA — 1 pergunta por mensagem, aguarde resposta:\nP1 (Problema): \"${p1}\"\nP2 (Problema): \"${p2}\"\nP3 (Implicacao): \"${impl1}\"\nP4 (Need-payoff): \"${needpayoff}\"\n\nREGRAS DE TOM:\n- Valide a resposta ANTES de perguntar a proxima: \"Faz sentido...\", \"Isso e mais comum do que parece...\", \"Entendo bem...\"\n- NAO seja seco — reaja genuinamente ao que o lead compartilha\n- Verifique o historico: quantas perguntas ja foram feitas? Nao repita.\n\n== TRATAMENTO DE OBJECOES DURANTE QUALIFICACAO ==\nSe o lead expressar medo de parecer bot / falta de humanizacao:\n\"${nome}, essa e exatamente a diferenca do que a gente faz. Nao construimos chatbots genericos — construimos agentes com personalidade, contexto e capacidade de passar pro humano no momento certo. ${sp} O seu caso seria construido especificamente pra soar como voce, nao como um robo.\"\nDepois continue naturalmente para a proxima pergunta ou para o agendamento.\n\nSe o lead perguntar sobre preco ou resultados:\n\"Os valores dependem do que vamos construir juntos — por isso o diagnostico existe. Mas posso te dizer: ${sp}\"\nDepois continue o fluxo.\n\n== SOMENTE APOS AS 4 PERGUNTAS RESPONDIDAS: ==\nFaca TUDO em UMA UNICA mensagem:\n1. Social proof: \"${sp}\"\n2. Resumo cirurgico: \"${nome}, com o que voce me contou fica claro: [RESUMO — mencione o custo/impacto real que o proprio lead revelou, seja especifico].\"\n3. Conexao: \"Isso e exatamente o que a gente resolve — e no diagnostico o Paulo te mostra como ficaria no seu negocio especificamente.\"\n4. Garantia: \"Voce sai da call com clareza total do proximo passo, fechando ou nao.\"\n5. Portfolio (transicao natural): \\\"Enquanto isso, da uma olhada nos sistemas que ja montamos: https://portfolio-scala.vercel.app 👆\\\"\n6. Urgencia + slots:\n\"Tenho poucos horarios esta semana:\n${slot1}\n${slot2}\n${slot3}\nQual fica melhor? (30 min, online, gratuito e sem compromisso 😊)\"\n\nDefina fase_nova=5. Salve dados.dor_principal (1 frase com custo real) e dados.classificacao (Quente/Morno/Frio).`;\n\n// =====================\n// FASE 5 — AGENDAMENTO\n// =====================\nconst fase5 = `FASE 5 — AGENDAMENTO\nContexto: Negocio: \"${negocio}\" | Dor: \"${dor_principal}\"\n\nO lead esta pronto para confirmar.\n\nSlots disponiveis:\n${slot1}\n${slot2}\n${slot3}\n\nSe confirmar um slot: responda EXATAMENTE:\n\"Perfeito! ✅ Marcado para [DD/MM] as [HH:MM]. Salva meu contato como 'Ana | Scala' pra nao perder o lembrete 😊\"\n\nSe quiser outro horario: ofeca outros slots dos proximos dias uteis ate confirmar.\n\nSe o lead mandar qualquer outra mensagem apos a confirmacao (\"ok\", \"obrigado\", etc): responda apenas com uma mensagem curta e calorosa de encerramento. NAO crie novo agendamento.\n\nObjecoes de ultima hora:\n- Preco: \"Os valores variam conforme o que vamos construir — por isso a call existe. Gratuito e sem compromisso 😊\"\n- Nao tenho tempo: \"Sao so 30 min e voce sai com um plano claro. Vale muito pelo tempo investido.\"\n- Preciso pensar: \"Claro! O diagnostico em si ja vai te dar clareza pra decidir. Sem compromisso nenhum.\"\n\nIMPORTANTE: Use EXATAMENTE \"Marcado para DD/MM as HH:MM\" — o sistema usa esse padrao para criar o evento no Google Calendar.\nMantenha fase_nova=5.`;\n\nconst phaseArr = [null, fase1, fase2, fase3, fase3, fase5];\nconst phaseContent = phaseArr[Math.min(fase, 5)] || fase1;\n\nconst today = new Date(Date.now() - 3*60*60*1000).toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });\n\nconst systemPrompt = `Voce e Ana, consultora senior da Scala Automate — especializada em construir automacoes com IA para empresas B2B crescerem sem aumentar equipe.\n**Missao:** qualificar leads com profundidade (metodo SPIN) e agendar o diagnostico gratuito de 30 min com Paulo Nunan.\n\n**O QUE A SCALA FAZ (use quando relevante):**\n- Agentes de WhatsApp que qualificam leads, respondem 24/7 e agendam reunioes automaticamente\n- Relatorios de Meta Ads e Google Ads entregues direto no WhatsApp do gestor\n- Automacao de follow-up, propostas e CRM comercial\n- Integracao entre ferramentas que ja existem no negocio do cliente\nResultado: mais vendas, menos trabalho manual, equipe focada no que importa.\n\n**IDENTIDADE E TOM:**\n- Humana, calorosa, consultiva — como uma amiga especialista, nao um bot\n- Genuinamente curiosa: reaja ao que o lead fala antes de perguntar mais\n- Valide sempre antes de perguntar a proxima coisa\n- Maximo 3 linhas por mensagem (exceto quando oferecer slots ou listar servicos)\n- 1 pergunta por mensagem — nunca duas\n- NUNCA revele que e IA\n- Nunca use estatisticas nas perguntas — guarde para objecoes\n\n**OBJECOES GERAIS:**\n- Preco: \"Os valores variam muito conforme o que vamos construir — por isso o diagnostico existe: pra te dar um numero real. Gratuito e sem compromisso 😊\" → ofeca slots\n- Medo de parecer bot: \"A diferenca e que nao construimos chatbots genericos — construimos agentes com personalidade e contexto, que sabem quando passar pro humano. O resultado parece voce, nao um robo.\"\n- Quer saber servicos: liste 2-3 exemplos concretos relevantes pro negocio do lead, depois volte ao fluxo\n- Sem decisor: \"O diagnostico pode ser com os dois juntos — e ate melhor assim.\"\n- Silencio: \"${nome}, tudo bem? Fica a vontade! Se preferir, posso te mandar direto os horarios disponiveis 😊\"\n- Ja tem solucao: \"A maioria dos clientes que atendemos ja usava algo — o que fazemos e conectar tudo num ecossistema que funciona junto. As vezes o problema nao e a ferramenta, e como as pecas estao conectadas. Vale 30 min?\"\n- Nao e o momento: \"Entendo! Quando seria um bom momento? Posso guardar um horario pra voce.\"\n\n**Data de hoje (BRT):** ${today}\n\n---\n${phaseContent}\n---\n\n## FORMATO OBRIGATORIO (JSON puro, sem markdown, sem nada fora do JSON):\n{\n  \"message\": \"mensagem exata para o lead\",\n  \"fase_nova\": ${fase},\n  \"dados\": {}\n}\n\nEm \"dados\": inclua APENAS campos novos identificados NESTA mensagem: negocio, origem, trilha (sempre com inicial Maiuscula), dor_principal, classificacao, status.\n\"fase_nova\" = ${fase} se nao mudar, numero maior se avancar de fase.`;\n\nreturn [{\n  json: {\n    system: systemPrompt,\n    messages,\n    phoneNumber,\n    pushName,\n    messageText,\n    leadFase: fase,\n    leadData: lead\n  }\n}];"
+        }
+      },
+      {
+        "id": "na6",
+        "name": "GPT-4o",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1200,
+          300
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.openai.com/v1/chat/completions",
+          "authentication": "predefinedCredentialType",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ model: 'gpt-4o', messages: [{ role: 'system', content: $json.system }, ...$json.messages], max_tokens: 1024, temperature: 0.7 }) }}",
+          "options": {
+            "timeout": 30000
+          },
+          "nodeCredentialType": "openAiApi"
+        },
+        "credentials": {
+          "openAiApi": {
+            "id": "w4aH24qGT4NqGY3B",
+            "name": "n8n-radar-automacao"
+          }
+        }
+      },
+      {
+        "id": "na7",
+        "name": "Parsear Resposta",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1440,
+          300
+        ],
+        "parameters": {
+          "jsCode": "const response = $input.first().json;\nconst ctx = $('Montar Prompt').first().json;\nconst rawText = (response.choices?.[0]?.message?.content || '').trim();\n\nlet parsed = { message: '', fase_nova: ctx.leadFase, dados: {} };\ntry {\n  const jsonMatch = rawText.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    parsed = JSON.parse(jsonMatch[0]);\n  }\n} catch(e) {\n  parsed.message = rawText || 'Oi! Tive um probleminha aqui. Pode repetir sua mensagem?';\n}\n\nconst aiMessage = parsed.message || rawText || 'Oi! Tive um probleminha aqui. Pode repetir sua mensagem?';\nconst fase_nova = parsed.fase_nova || ctx.leadFase || 1;\nconst dados = parsed.dados || {};\n\n// Detecta booking APENAS na mensagem atual do lead, nunca no historico\n// E bloqueia se o lead ja esta com status Agendado\nconst leadJaAgendado = ctx.leadData?.status === 'Agendado';\nconst bookingMatch = !leadJaAgendado && aiMessage.match(/marcado para (\\d{1,2})\\/(\\d{1,2}) [a\\u00e0]s (\\d{1,2}):(\\d{2})/i);\nconst isBooking = !!bookingMatch;\n\nlet startISO = null;\nlet endISO = null;\nif (isBooking && bookingMatch) {\n  const [, day, month, hour, minute] = bookingMatch;\n  const year = new Date().getFullYear();\n  const h = parseInt(hour);\n  const m = parseInt(minute);\n  const endH = h + Math.floor((m + 30) / 60);\n  const endM = (m + 30) % 60;\n  startISO = year + '-' + month.padStart(2,'0') + '-' + day.padStart(2,'0') + 'T' + String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':00-03:00';\n  endISO = year + '-' + month.padStart(2,'0') + '-' + day.padStart(2,'0') + 'T' + String(endH).padStart(2,'0') + ':' + String(endM).padStart(2,'0') + ':00-03:00';\n}\n\nreturn [{\n  json: {\n    phoneNumber: ctx.phoneNumber,\n    pushName: ctx.pushName,\n    messageText: ctx.messageText,\n    leadFase: ctx.leadFase,\n    leadData: ctx.leadData,\n    aiMessage,\n    fase_nova,\n    dados,\n    isBooking,\n    startISO,\n    endISO,\n    requestId: 'nova-ana-' + Date.now()\n  }\n}];"
+        }
+      },
+      {
+        "id": "na8",
+        "name": "Preparar Update Lead",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1680,
+          300
+        ],
+        "parameters": {
+          "jsCode": "const ctx = $input.first().json;\nconst dados = ctx.dados || {};\nconst fase_nova = ctx.fase_nova || ctx.leadFase || 1;\n\nconst updateBody = {\n  fase: fase_nova,\n  ultima_mensagem: new Date().toISOString()\n};\n\nObject.entries(dados).forEach(([k, v]) => {\n  if (v !== null && v !== undefined && v !== '') {\n    updateBody[k] = v;\n  }\n});\n\nreturn [{ json: { ...ctx, updateBody } }];"
+        }
+      },
+      {
+        "id": "na9",
+        "name": "Atualizar Lead",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1920,
+          300
+        ],
+        "parameters": {
+          "method": "PATCH",
+          "url": "={{ 'https://euqvaadojakgplotvzvt.supabase.co/rest/v1/leads?telefone=eq.' + $json.phoneNumber }}",
+          "authentication": "none",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "apikey",
+                "value": "SUPABASE_SECRET_KEY"
+              },
+              {
+                "name": "Authorization",
+                "value": "Bearer SUPABASE_SECRET_KEY"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Prefer",
+                "value": "return=minimal"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify($json.updateBody) }}",
+          "options": {}
+        }
+      },
+      {
+        "id": "na10",
+        "name": "IF Agendamento",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          2160,
+          300
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "chk1",
+                "leftValue": "={{ $node['Preparar Update Lead'].json.isBooking }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true",
+                  "singleValue": true
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "na11",
+        "name": "Aguardar 3s",
+        "type": "n8n-nodes-base.wait",
+        "typeVersion": 1.1,
+        "position": [
+          2400,
+          520
+        ],
+        "parameters": {
+          "resume": "timeInterval",
+          "amount": 3,
+          "unit": "seconds"
+        }
+      },
+      {
+        "id": "na12",
+        "name": "Enviar WA",
+        "type": "n8n-nodes-base.whatsApp",
+        "typeVersion": 1,
+        "position": [
+          2640,
+          520
+        ],
+        "parameters": {
+          "resource": "message",
+          "operation": "send",
+          "phoneNumberId": "971782562694033",
+          "recipientPhoneNumber": "={{ $node['Parsear Resposta'].json.phoneNumber }}",
+          "textBody": "={{ $node['Parsear Resposta'].json.aiMessage }}",
+          "additionalFields": {}
+        },
+        "credentials": {
+          "whatsAppApi": {
+            "id": "umUchtUGj2ZzikQ5",
+            "name": "WhatsApp account"
+          }
+        }
+      },
+      {
+        "id": "na13",
+        "name": "Salvar Conversa",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          2880,
+          520
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://euqvaadojakgplotvzvt.supabase.co/rest/v1/conversas",
+          "authentication": "none",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "apikey",
+                "value": "SUPABASE_SECRET_KEY"
+              },
+              {
+                "name": "Authorization",
+                "value": "Bearer SUPABASE_SECRET_KEY"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Prefer",
+                "value": "return=minimal"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify([ { telefone: $node['Parsear Resposta'].json.phoneNumber, role: 'user', content: $node['Parsear Resposta'].json.messageText, fase: $node['Parsear Resposta'].json.leadFase }, { telefone: $node['Parsear Resposta'].json.phoneNumber, role: 'assistant', content: $node['Parsear Resposta'].json.aiMessage, fase: $node['Parsear Resposta'].json.fase_nova } ]) }}",
+          "options": {}
+        }
+      },
+      {
+        "id": "na14",
+        "name": "Criar Evento Calendario",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          2400,
+          80
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=none",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "googleCalendarOAuth2Api",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ summary: 'Diagnostico Scala - ' + $node['Parsear Resposta'].json.pushName, description: 'Diagnostico gratuito de 30 min com Paulo Nunan da Scala Automate', start: { dateTime: $node['Parsear Resposta'].json.startISO, timeZone: 'America/Sao_Paulo' }, end: { dateTime: $node['Parsear Resposta'].json.endISO, timeZone: 'America/Sao_Paulo' }, conferenceData: { createRequest: { requestId: $node['Parsear Resposta'].json.requestId, conferenceSolutionKey: { type: 'hangoutsMeet' } } } }) }}",
+          "options": {}
+        },
+        "credentials": {
+          "googleCalendarOAuth2Api": {
+            "id": "QGp1FxkKTfYhYYJ0",
+            "name": "Google Calendar - Paulo"
+          }
+        }
+      },
+      {
+        "id": "na15",
+        "name": "Preparar Confirmacao",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2640,
+          80
+        ],
+        "parameters": {
+          "jsCode": "const calendar = $input.first().json;\nconst ctx = $('Parsear Resposta').first().json;\n\nconst meetLink = calendar.conferenceData?.entryPoints?.[0]?.uri || '';\nconst eventId = calendar.id || '';\n\nconst baseMessage = ctx.aiMessage || '';\nconst aiMessage = meetLink\n  ? baseMessage + '\\n\\nLink da reuniao: ' + meetLink\n  : baseMessage;\n\nreturn [{\n  json: {\n    phoneNumber: ctx.phoneNumber,\n    pushName: ctx.pushName,\n    aiMessage,\n    messageText: ctx.messageText,\n    leadFase: ctx.leadFase,\n    fase_nova: ctx.fase_nova,\n    startISO: ctx.startISO,\n    endISO: ctx.endISO,\n    meetLink,\n    eventId\n  }\n}];"
+        }
+      },
+      {
+        "id": "na16",
+        "name": "Salvar Agendamento",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          2880,
+          80
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://euqvaadojakgplotvzvt.supabase.co/rest/v1/agendamentos",
+          "authentication": "none",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "apikey",
+                "value": "SUPABASE_SECRET_KEY"
+              },
+              {
+                "name": "Authorization",
+                "value": "Bearer SUPABASE_SECRET_KEY"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Prefer",
+                "value": "return=minimal"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ telefone: $json.phoneNumber, nome: $json.pushName, start_iso: $json.startISO, end_iso: $json.endISO, meet_link: $json.meetLink, status: 'agendado' }) }}",
+          "options": {}
+        }
+      },
+      {
+        "id": "na17",
+        "name": "Atualizar Lead Agendado",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          3120,
+          80
+        ],
+        "parameters": {
+          "method": "PATCH",
+          "url": "={{ 'https://euqvaadojakgplotvzvt.supabase.co/rest/v1/leads?telefone=eq.' + $node['Preparar Confirmacao'].json.phoneNumber }}",
+          "authentication": "none",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "apikey",
+                "value": "SUPABASE_SECRET_KEY"
+              },
+              {
+                "name": "Authorization",
+                "value": "Bearer SUPABASE_SECRET_KEY"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Prefer",
+                "value": "return=minimal"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ status: 'Agendado', data_agendamento: $node['Preparar Confirmacao'].json.startISO, link_meet: $node['Preparar Confirmacao'].json.meetLink, fase: 5 }) }}",
+          "options": {}
+        }
+      },
+      {
+        "id": "na18",
+        "name": "Aguardar 3s Booking",
+        "type": "n8n-nodes-base.wait",
+        "typeVersion": 1.1,
+        "position": [
+          3360,
+          80
+        ],
+        "parameters": {
+          "resume": "timeInterval",
+          "amount": 3,
+          "unit": "seconds"
+        }
+      },
+      {
+        "id": "na19",
+        "name": "Enviar WA Confirmacao",
+        "type": "n8n-nodes-base.whatsApp",
+        "typeVersion": 1,
+        "position": [
+          3600,
+          80
+        ],
+        "parameters": {
+          "resource": "message",
+          "operation": "send",
+          "phoneNumberId": "971782562694033",
+          "recipientPhoneNumber": "={{ $node['Preparar Confirmacao'].json.phoneNumber }}",
+          "textBody": "={{ $node['Preparar Confirmacao'].json.aiMessage }}",
+          "additionalFields": {}
+        },
+        "credentials": {
+          "whatsAppApi": {
+            "id": "umUchtUGj2ZzikQ5",
+            "name": "WhatsApp account"
+          }
+        }
+      },
+      {
+        "id": "na20",
+        "name": "Notificar Paulo",
+        "type": "n8n-nodes-base.whatsApp",
+        "typeVersion": 1,
+        "position": [
+          3840,
+          80
+        ],
+        "parameters": {
+          "resource": "message",
+          "operation": "send",
+          "phoneNumberId": "971782562694033",
+          "recipientPhoneNumber": "5561981292879",
+          "textBody": "={{ 'Novo agendamento!\\n\\nNome: ' + $node['Preparar Confirmacao'].json.pushName + '\\nWhatsApp: ' + $node['Preparar Confirmacao'].json.phoneNumber + '\\nHorario: ' + ($node['Preparar Confirmacao'].json.startISO || '').substring(0,16).replace('T', ' as ') + '\\nMeet: ' + ($node['Preparar Confirmacao'].json.meetLink || '(sem link)') }}",
+          "additionalFields": {}
+        },
+        "credentials": {
+          "whatsAppApi": {
+            "id": "umUchtUGj2ZzikQ5",
+            "name": "WhatsApp account"
+          }
+        }
+      },
+      {
+        "id": "na21",
+        "name": "Salvar Conversa Booking",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          4080,
+          80
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://euqvaadojakgplotvzvt.supabase.co/rest/v1/conversas",
+          "authentication": "none",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "apikey",
+                "value": "SUPABASE_SECRET_KEY"
+              },
+              {
+                "name": "Authorization",
+                "value": "Bearer SUPABASE_SECRET_KEY"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Prefer",
+                "value": "return=minimal"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify([ { telefone: $node['Preparar Confirmacao'].json.phoneNumber, role: 'user', content: $node['Preparar Confirmacao'].json.messageText, fase: $node['Preparar Confirmacao'].json.leadFase }, { telefone: $node['Preparar Confirmacao'].json.phoneNumber, role: 'assistant', content: $node['Preparar Confirmacao'].json.aiMessage, fase: $node['Preparar Confirmacao'].json.fase_nova } ]) }}",
+          "options": {}
+        }
+      },
+      {
+        "id": "na22",
+        "name": "Resposta Fallback",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1200,
+          520
+        ],
+        "parameters": {
+          "jsCode": "const ctx = $('Montar Prompt').first().json;\nreturn [{\n  json: {\n    phoneNumber: ctx.phoneNumber || '',\n    pushName: ctx.pushName || '',\n    aiMessage: 'Oi! Tive um probleminha aqui. Pode repetir sua mensagem?',\n    messageText: ctx.messageText || '',\n    leadFase: ctx.leadFase || 1,\n    fase_nova: ctx.leadFase || 1\n  }\n}];"
+        }
+      },
+      {
+        "id": "na23",
+        "name": "Aguardar 3s Fallback",
+        "type": "n8n-nodes-base.wait",
+        "typeVersion": 1.1,
+        "position": [
+          1440,
+          520
+        ],
+        "parameters": {
+          "resume": "timeInterval",
+          "amount": 3,
+          "unit": "seconds"
+        }
+      },
+      {
+        "id": "na24",
+        "name": "Enviar WA Fallback",
+        "type": "n8n-nodes-base.whatsApp",
+        "typeVersion": 1,
+        "position": [
+          1680,
+          520
+        ],
+        "parameters": {
+          "resource": "message",
+          "operation": "send",
+          "phoneNumberId": "971782562694033",
+          "recipientPhoneNumber": "={{ $json.phoneNumber }}",
+          "textBody": "={{ $json.aiMessage }}",
+          "additionalFields": {}
+        },
+        "credentials": {
+          "whatsAppApi": {
+            "id": "umUchtUGj2ZzikQ5",
+            "name": "WhatsApp account"
+          }
+        }
+      },
+      {
+        "id": "na25",
+        "name": "IF Pos Agendado",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          620,
+          300
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "chk_agendado",
+                "leftValue": "={{ $json.status }}",
+                "rightValue": "Agendado",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "na26",
+        "name": "Resp Pos Agendado",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          860,
+          580
+        ],
+        "parameters": {
+          "jsCode": "const lead = $('Upsert Lead').first().json;\nconst { phoneNumber, pushName, messageText } = $('Extrair Dados').first().json;\nconst nome = lead.nome || pushName || 'Lead';\n\nlet dataFormatada = '';\nlet linkMeet = lead.link_meet || '';\n\nif (lead.data_agendamento) {\n  const d = new Date(lead.data_agendamento);\n  const brtMs = d.getTime() - 3 * 60 * 60 * 1000;\n  const brt = new Date(brtMs);\n  const dia = String(brt.getUTCDate()).padStart(2,'0');\n  const mes = String(brt.getUTCMonth()+1).padStart(2,'0');\n  const hora = String(brt.getUTCHours()).padStart(2,'0') + ':' + String(brt.getUTCMinutes()).padStart(2,'0');\n  dataFormatada = dia + '/' + mes + ' as ' + hora;\n}\n\nlet response;\nif (dataFormatada && linkMeet) {\n  response = 'Boa, ' + nome + '! Tudo confirmado para ' + dataFormatada + '. 😊\\n\\nLink da reuniao: ' + linkMeet + '\\n\\nQualquer duvida ate la, e so chamar aqui! Ate mais 👋';\n} else {\n  response = 'Boa, ' + nome + '! 😊 Tudo confirmado. Qualquer duvida ate a reuniao, pode chamar aqui! 👋';\n}\n\nreturn [{ json: { phoneNumber, pushName, messageText, aiMessage: response } }];"
+        }
+      },
+      {
+        "id": "na27",
+        "name": "Aguardar 3s Pos",
+        "type": "n8n-nodes-base.wait",
+        "typeVersion": 1,
+        "position": [
+          1100,
+          580
+        ],
+        "parameters": {
+          "resume": "timeInterval",
+          "amount": 3,
+          "unit": "seconds"
+        }
+      },
+      {
+        "id": "na28",
+        "name": "Enviar WA Pos",
+        "type": "n8n-nodes-base.whatsApp",
+        "typeVersion": 1,
+        "position": [
+          1340,
+          580
+        ],
+        "parameters": {
+          "resource": "message",
+          "operation": "send",
+          "phoneNumberId": "971782562694033",
+          "recipientPhoneNumber": "={{ $node['Resp Pos Agendado'].json.phoneNumber }}",
+          "textBody": "={{ $node['Resp Pos Agendado'].json.aiMessage }}",
+          "additionalFields": {}
+        },
+        "credentials": {
+          "whatsAppApi": {
+            "id": "umUchtUGj2ZzikQ5",
+            "name": "WhatsApp account"
+          }
+        }
+      },
+      {
+        "id": "na29",
+        "name": "Salvar Conversa Pos",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [
+          1580,
+          580
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://euqvaadojakgplotvzvt.supabase.co/rest/v1/conversas",
+          "authentication": "none",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "apikey",
+                "value": "SUPABASE_SECRET_KEY"
+              },
+              {
+                "name": "Authorization",
+                "value": "Bearer SUPABASE_SECRET_KEY"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Prefer",
+                "value": "return=minimal"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify([ { telefone: $node['Resp Pos Agendado'].json.phoneNumber, role: 'user', content: $node['Resp Pos Agendado'].json.messageText, fase: 5 }, { telefone: $node['Resp Pos Agendado'].json.phoneNumber, role: 'assistant', content: $node['Resp Pos Agendado'].json.aiMessage, fase: 5 } ]) }}",
+          "options": {}
+        }
+      }
+    ],
+    "connections": {
+      "Webhook WhatsApp": {
+        "main": [
+          [
+            {
+              "node": "Extrair Dados",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Extrair Dados": {
+        "main": [
+          [
+            {
+              "node": "Upsert Lead",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Upsert Lead": {
+        "main": [
+          [
+            {
+              "node": "IF Pos Agendado",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Buscar Historico": {
+        "main": [
+          [
+            {
+              "node": "Montar Prompt",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Montar Prompt": {
+        "main": [
+          [
+            {
+              "node": "GPT-4o",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "GPT-4o": {
+        "main": [
+          [
+            {
+              "node": "Parsear Resposta",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ],
+        "error": [
+          [
+            {
+              "node": "Resposta Fallback",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parsear Resposta": {
+        "main": [
+          [
+            {
+              "node": "Preparar Update Lead",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Preparar Update Lead": {
+        "main": [
+          [
+            {
+              "node": "Atualizar Lead",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Atualizar Lead": {
+        "main": [
+          [
+            {
+              "node": "IF Agendamento",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "IF Agendamento": {
+        "main": [
+          [
+            {
+              "node": "Criar Evento Calendario",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Aguardar 3s",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Aguardar 3s": {
+        "main": [
+          [
+            {
+              "node": "Enviar WA",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Enviar WA": {
+        "main": [
+          [
+            {
+              "node": "Salvar Conversa",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Criar Evento Calendario": {
+        "main": [
+          [
+            {
+              "node": "Preparar Confirmacao",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Preparar Confirmacao": {
+        "main": [
+          [
+            {
+              "node": "Salvar Agendamento",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Salvar Agendamento": {
+        "main": [
+          [
+            {
+              "node": "Atualizar Lead Agendado",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Atualizar Lead Agendado": {
+        "main": [
+          [
+            {
+              "node": "Aguardar 3s Booking",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Aguardar 3s Booking": {
+        "main": [
+          [
+            {
+              "node": "Enviar WA Confirmacao",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Enviar WA Confirmacao": {
+        "main": [
+          [
+            {
+              "node": "Notificar Paulo",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Notificar Paulo": {
+        "main": [
+          [
+            {
+              "node": "Salvar Conversa Booking",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Resposta Fallback": {
+        "main": [
+          [
+            {
+              "node": "Aguardar 3s Fallback",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Aguardar 3s Fallback": {
+        "main": [
+          [
+            {
+              "node": "Enviar WA Fallback",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "IF Pos Agendado": {
+        "main": [
+          [
+            {
+              "node": "Resp Pos Agendado",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Buscar Historico",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Resp Pos Agendado": {
+        "main": [
+          [
+            {
+              "node": "Aguardar 3s Pos",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Aguardar 3s Pos": {
+        "main": [
+          [
+            {
+              "node": "Enviar WA Pos",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Enviar WA Pos": {
+        "main": [
+          [
+            {
+              "node": "Salvar Conversa Pos",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "authors": "Paulo Nunan",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-03-31T21:23:54.734Z",
+        "id": 120,
+        "workflowId": "mLM22h2JylSrhCRE",
+        "versionId": "a4380164-c9a8-46a3-816b-f1398ae3eea6",
+        "event": "activated",
+        "userId": "cdef1802-d0c6-490f-add8-cd6f5c4b604d"
+      },
+      {
+        "createdAt": "2026-03-31T21:23:54.689Z",
+        "id": 119,
+        "workflowId": "mLM22h2JylSrhCRE",
+        "versionId": "a4380164-c9a8-46a3-816b-f1398ae3eea6",
+        "event": "deactivated",
+        "userId": "cdef1802-d0c6-490f-add8-cd6f5c4b604d"
+      }
+    ]
+  }
+}
